@@ -11,7 +11,16 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--no-browser", action="store_true", help="не открывать браузер")
+    parser.add_argument("--reset-login", action="store_true",
+                        help="сбросить логин и пароль входа к исходным и выйти")
     args = parser.parse_args()
+
+    if args.reset_login:
+        from app import db
+        db.execute("DELETE FROM settings WHERE key IN ('auth_login', 'auth_hash')")
+        db.execute("UPDATE settings SET value = CAST(value AS INTEGER) + 1 WHERE key = 'auth_version'")
+        print("Логин и пароль сброшены к исходному мастер-паролю. Все сессии завершены.")
+        return
 
     url = f"http://{args.host}:{args.port}"
     if not args.no_browser:

@@ -13,6 +13,9 @@ async function request(method, url, body) {
   }
   if (resp.status === 204) return null;
   const data = await resp.json().catch(() => null);
+  if (resp.status === 401 && !url.startsWith("/api/auth/")) {
+    window.dispatchEvent(new Event("auth:required"));
+  }
   if (!resp.ok) {
     let msg = data?.detail ?? `Ошибка ${resp.status}`;
     if (Array.isArray(msg)) msg = msg.map((d) => d.msg?.replace(/^Value error, /, "")).join("; ");
@@ -24,6 +27,10 @@ async function request(method, url, body) {
 }
 
 export const api = {
+  me: () => request("GET", "/api/auth/me"),
+  login: (body) => request("POST", "/api/auth/login", body),
+  logout: () => request("POST", "/api/auth/logout"),
+  changeCredentials: (body) => request("PUT", "/api/auth/credentials", body),
   dashboard: () => request("GET", "/api/dashboard"),
   clients: () => request("GET", "/api/clients"),
   client: (id) => request("GET", `/api/clients/${id}`),

@@ -8,12 +8,12 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import db
+from . import auth, db
 from .collector import CooldownError, collector
 from .crypto import decrypt, encrypt
 from .optimizer import OptimizerError, normalize_base_url
@@ -42,7 +42,84 @@ async def lifespan(_: FastAPI):
     await collector.close()
 
 
-app = FastAPI(title="Optimizer Dashboard", lifespan=lifespan)
+app = FastAPI(title="Optimizer Dashboard", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+PUBLIC_API = {"/api/auth/login", "/api/auth/me"}
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    """Every /api/* call needs a valid session cookie (except login itself)."""
+    path = request.url.path
+    if path.startswith("/api/") and path not in PUBLIC_API:
+        if not auth.read_session(request.cookies.get(auth.COOKIE_NAME)):
+            return JSONResponse({"detail": "Требуется вход"}, status_code=401)
+    return await call_next(request)
+
+
+# ---------- auth ----------
+
+class LoginIn(BaseModel):
+    login: str = Field(max_length=100)
+    password: str = Field(max_length=200)
+    remember: bool = True
+
+
+class CredentialsIn(BaseModel):
+    current_password: str
+    new_login: str = Field(min_length=3, max_length=50)
+    new_password: str = Field(min_length=8, max_length=200)
+
+
+def _set_session_cookie(request: Request, response: Response, remember: bool) -> None:
+    value, ttl = auth.make_session(remember)
+    response.set_cookie(
+        auth.COOKIE_NAME, value, max_age=ttl if remember else None, httponly=True,
+        samesite="lax", secure=request.url.scheme == "https", path="/",
+    )
+
+
+@app.post("/api/auth/login")
+async def login(body: LoginIn, request: Request, response: Response):
+    ip = request.client.host if request.client else "?"
+    locked = auth.lock_remaining(ip)
+    if locked:
+        raise HTTPException(429, f"Слишком много неудачных попыток. Попробуйте через {locked} с")
+    ok = await asyncio.to_thread(auth.check_credentials, body.login, body.password)
+    if not ok:
+        await asyncio.sleep(0.6)  # slows down guessing
+        lock = auth.register_failure(ip)
+        if lock:
+            raise HTTPException(429, f"Слишком много неудачных попыток. Вход заблокирован на {lock} с")
+        raise HTTPException(401, "Неверный логин или пароль")
+    auth.register_success(ip)
+    _set_session_cookie(request, response, body.remember)
+    return {"login": auth.account()["login"]}
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    response.delete_cookie(auth.COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def me(request: Request):
+    login_name = auth.read_session(request.cookies.get(auth.COOKIE_NAME))
+    if not login_name:
+        raise HTTPException(401, "Требуется вход")
+    return {"login": login_name}
+
+
+@app.put("/api/auth/credentials")
+async def change_credentials(body: CredentialsIn, request: Request, response: Response):
+    ok = await asyncio.to_thread(auth.verify_password, body.current_password, auth.account()["hash"])
+    if not ok:
+        await asyncio.sleep(0.6)
+        raise HTTPException(400, "Текущий пароль указан неверно")
+    await asyncio.to_thread(auth.change_credentials, body.new_login, body.new_password)
+    _set_session_cookie(request, response, True)  # other sessions are logged out
+    return {"login": auth.account()["login"]}
 
 
 # ---------- models ----------

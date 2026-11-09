@@ -6,6 +6,7 @@ import * as clients from "./views/clients.js";
 import * as clientForm from "./views/client-form.js";
 import * as clientDetail from "./views/client-detail.js";
 import * as settings from "./views/settings.js";
+import { showLogin } from "./views/login.js";
 
 const ROUTES = [
   [/^#\/?(dashboard)?$/, dashboard, "dashboard"],
@@ -33,6 +34,7 @@ function setActiveTab(name) {
 }
 
 async function route() {
+  if (document.body.classList.contains("auth-locked")) return;
   const hash = location.hash || "#/dashboard";
   let match = null;
   for (const [re, mod, tab] of ROUTES) {
@@ -139,6 +141,7 @@ syncBtn.addEventListener("click", async () => {
 // ---------- next scheduled run ----------
 const nextRunEl = document.getElementById("next-run");
 export async function refreshNextRun() {
+  if (document.body.classList.contains("auth-locked")) return;
   try {
     const s = await api.settings();
     if (!s.schedule_enabled || !s.next_run) {
@@ -155,14 +158,38 @@ window.addEventListener("sync:start", () => pollSync());
 
 // Catch scheduled runs that start while the page is open.
 setInterval(async () => {
-  if (polling) return;
+  if (polling || document.body.classList.contains("auth-locked")) return;
   try {
     const st = await api.syncStatus();
     if (st.running) pollSync();
   } catch { /* server offline */ }
 }, 15000);
 
-route();
-refreshNextRun();
-setInterval(refreshNextRun, 60000);
-api.syncStatus().then((st) => { if (st.running) pollSync(); }).catch(() => {});
+// ---------- auth ----------
+let started = false;
+
+function start() {
+  document.body.classList.remove("auth-pending", "auth-locked");
+  if (!started) {
+    started = true;
+    setInterval(refreshNextRun, 60000);
+  }
+  route();
+  refreshNextRun();
+  api.syncStatus().then((st) => { if (st.running) pollSync(); }).catch(() => {});
+}
+
+function requireLogin() {
+  if (cleanup) { try { cleanup(); } catch { /* ignore */ } cleanup = null; }
+  view.innerHTML = "";
+  showLogin(start);
+}
+
+window.addEventListener("auth:required", requireLogin);
+
+document.getElementById("logout").addEventListener("click", async () => {
+  try { await api.logout(); } catch { /* ignore */ }
+  requireLogin();
+});
+
+api.me().then(start).catch(requireLogin);

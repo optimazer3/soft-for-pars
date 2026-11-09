@@ -3,7 +3,7 @@ import { api } from "../api.js";
 import { fmtTime, html, icon, mount, toast, withBusy } from "../ui.js";
 
 export async function render(root) {
-  const s = await api.settings();
+  const [s, me] = await Promise.all([api.settings(), api.me()]);
   let times = [...s.schedule_times];
 
   mount(root, html`
@@ -51,6 +51,7 @@ export async function render(root) {
           <button class="btn btn-primary" id="save">${icon("check")} Сохранить</button>
         </div>
       </div>
+      <div class="side-col">
       <div class="card tips">
         <h3>Как это работает</h3>
         <ol>
@@ -60,6 +61,15 @@ export async function render(root) {
           <li>Если сайт отвечает ошибками или просит притормозить, программа делает паузу и повторяет позже. Если сервер не справляется у нескольких клиентов подряд — сбор по этому домену останавливается до следующего запуска.</li>
         </ol>
         <p id="next" style="margin-top:14px"></p>
+      </div>
+      <form class="card" id="acc-form" autocomplete="off" novalidate>
+        <h3>Вход на этот сайт</h3>
+        <p class="hint">Смените логин или пароль. Все, кто вошёл со старым паролем, будут разлогинены.</p>
+        <div class="field"><input id="acc-login" placeholder=" " value="${me.login}" autocomplete="username"><label for="acc-login">Логин</label></div>
+        <div class="field"><input id="acc-new" type="password" placeholder=" " autocomplete="new-password"><label for="acc-new">Новый пароль (от 8 символов)</label></div>
+        <div class="field"><input id="acc-cur" type="password" placeholder=" " autocomplete="current-password"><label for="acc-cur">Текущий пароль</label></div>
+        <button class="btn" id="acc-save" type="submit">${icon("check")} Сменить</button>
+      </form>
       </div>
     </div>`);
 
@@ -109,6 +119,29 @@ export async function render(root) {
   ["#conc", "#int", "#cd"].forEach((q) => $(q).addEventListener("input", drawProtect));
   drawProtect();
 
+  $("#acc-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      new_login: $("#acc-login").value.trim(),
+      new_password: $("#acc-new").value,
+      current_password: $("#acc-cur").value,
+    };
+    if (body.new_login.length < 3 || body.new_password.length < 8 || !body.current_password) {
+      toast("error", "Проверьте поля", "Логин — от 3 символов, новый пароль — от 8, текущий пароль обязателен");
+      return;
+    }
+    await withBusy($("#acc-save"), async () => {
+      try {
+        await api.changeCredentials(body);
+        $("#acc-new").value = "";
+        $("#acc-cur").value = "";
+        toast("success", "Данные для входа изменены", "Остальные сессии завершены");
+      } catch (err) {
+        toast("error", "Не удалось сменить", err.message);
+      }
+    });
+  });
+
   $("#save").addEventListener("click", (e) => withBusy(e.currentTarget, async () => {
     try {
       const res = await api.saveSettings({
@@ -128,3 +161,4 @@ export async function render(root) {
     }
   }));
 }
+
