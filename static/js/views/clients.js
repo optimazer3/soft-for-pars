@@ -109,7 +109,7 @@ export async function render(root) {
           const res = await api.syncClient(id);
           res.ok ? toast("success", `${c.name}: данные обновлены`) : toast("error", `${c.name}: ошибка сбора`, res.error);
         } catch (err) {
-          toast("error", "Ошибка", err.message);
+          err.status === 429 ? toast("info", "Данные ещё свежие", err.message) : toast("error", "Ошибка", err.message);
         }
       });
       await reload();

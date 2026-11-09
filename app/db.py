@@ -53,9 +53,16 @@ CREATE TABLE IF NOT EXISTS settings (
 DEFAULT_SETTINGS: dict[str, Any] = {
     "schedule_enabled": True,
     "schedule_times": ["09:00", "14:00", "19:00"],
-    "concurrency": 5,
+    # Load protection (see throttle.py)
+    "concurrency": 2,             # requests in flight to the Optimizer domain at once
+    "request_interval_ms": 700,   # pause between two requests to the same site
+    "cooldown_min": 10,           # don't re-collect a client more often than this
     "last_scheduled_run": None,
 }
+
+MIGRATIONS = [
+    "ALTER TABLE snapshots ADD COLUMN progress_json TEXT",
+]
 
 
 def now_iso() -> str:
@@ -71,6 +78,12 @@ def conn() -> sqlite3.Connection:
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA foreign_keys=ON")
         c.executescript(SCHEMA)
+        for sql in MIGRATIONS:
+            try:
+                c.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # already applied
+        c.commit()
         _conn = c
     return _conn
 
@@ -117,21 +130,24 @@ def set_settings(values: dict[str, Any]) -> dict[str, Any]:
 # ---------- snapshots ----------
 
 def save_snapshot(client_id: int, period: str, source_updated_at: str | None,
-                  kpi: dict, branches: list[dict]) -> None:
+                  kpi: dict, branches: list[dict], progress: dict | None = None) -> None:
     ts = now_iso()
     execute(
         """
-        INSERT INTO snapshots(client_id, day, period, fetched_at, source_updated_at, kpi_json, branches_json)
-        VALUES(?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO snapshots(client_id, day, period, fetched_at, source_updated_at,
+                              kpi_json, branches_json, progress_json)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(client_id, day) DO UPDATE SET
             period = excluded.period,
             fetched_at = excluded.fetched_at,
             source_updated_at = excluded.source_updated_at,
             kpi_json = excluded.kpi_json,
-            branches_json = excluded.branches_json
+            branches_json = excluded.branches_json,
+            progress_json = excluded.progress_json
         """,
         (client_id, ts[:10], period, ts, source_updated_at,
-         json.dumps(kpi, ensure_ascii=False), json.dumps(branches, ensure_ascii=False)),
+         json.dumps(kpi, ensure_ascii=False), json.dumps(branches, ensure_ascii=False),
+         json.dumps(progress, ensure_ascii=False) if progress is not None else None),
     )
 
 
@@ -143,4 +159,6 @@ def latest_snapshot(client_id: int) -> dict | None:
     if row:
         row["kpi"] = json.loads(row.pop("kpi_json"))
         row["branches"] = json.loads(row.pop("branches_json"))
+        progress = row.pop("progress_json", None)
+        row["progress"] = json.loads(progress) if progress else None
     return row

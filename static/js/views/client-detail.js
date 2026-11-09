@@ -3,6 +3,7 @@ import { api } from "../api.js";
 import { GROUPS, METRICS, formatValue, metricKind, metricLabel, metricStatus } from "../metrics.js";
 import { avatar, fmtPeriod, hostOf, html, icon, mount, relTime, segmented, toast, withBusy } from "../ui.js";
 import { tile } from "./dashboard.js";
+import { planBar, planCell } from "../plan.js";
 
 export async function render(root, [idParam]) {
   const id = +idParam;
@@ -23,15 +24,22 @@ export async function render(root, [idParam]) {
     return snapshot.branches.find((b) => b.id === scope)?.kpi || {};
   }
 
-  function metricsHtml(prev) {
+  function scopeProgress() {
+    if (!snapshot) return null;
+    if (scope === "all") return snapshot.progress;
+    return snapshot.branches.find((b) => b.id === scope)?.progress || null;
+  }
+
+  function metricsHtml(prev, prevProgress) {
     const kpi = scopeKpi();
     const branch = scope !== "all" && snapshot.branches.find((b) => b.id === scope);
     if (branch && !branch.kpi) {
       return html`<div class="error-banner">${icon("alert")}<div>По салону не удалось получить данные: ${branch.error || ""}</div></div>`;
     }
-    return groupsFor(kpi).map(([title, ks]) => html`<div class="section">
+    const sections = groupsFor(kpi).map(([title, ks]) => html`<div class="section">
       <h2 class="section-title">${title}</h2>
       <div class="tiles auto stagger">${ks.map((k, i) => tile(k, kpi[k], i, prev?.[k]?.current))}</div></div>`);
+    return html`${planBar(scopeProgress(), snapshot.period, { prev: prevProgress?.forecast_percent })}${sections}`;
   }
 
   function compareHtml() {
@@ -45,7 +53,10 @@ export async function render(root, [idParam]) {
     return html`<div class="section"><h2 class="section-title">Сравнение салонов</h2>
       <div class="table-wrap"><table class="grid compare">
         <thead><tr><th>Показатель</th>${br.map((b) => html`<th class="num">${b.name}</th>`)}<th class="num">Итого</th></tr></thead>
-        <tbody>${keys.map((k, i) => html`<tr style="--i:${i}"><td>${metricLabel(k)}</td>
+        <tbody>
+          <tr><td>План продаж на очки</td>${br.map((b) => html`<td class="num">${planCell(b.progress, "exec")}</td>`)}<td class="num">${planCell(snapshot.progress, "exec")}</td></tr>
+          <tr><td>Прогноз выполнения</td>${br.map((b) => html`<td class="num">${planCell(b.progress, "forecast")}</td>`)}<td class="num">${planCell(snapshot.progress, "forecast")}</td></tr>
+          ${keys.map((k, i) => html`<tr style="--i:${i}"><td>${metricLabel(k)}</td>
           ${br.map((b) => cell(k, b.kpi[k]))}${cell(k, snapshot.kpi[k])}</tr>`)}</tbody>
       </table></div></div>`;
   }
@@ -86,8 +97,9 @@ export async function render(root, [idParam]) {
     if (scopeEl) {
       segmented(scopeEl, (v) => {
         const prev = scopeKpi();
+        const prevProgress = scopeProgress();
         scope = v;
-        mount(root.querySelector("#metrics"), metricsHtml(prev));
+        mount(root.querySelector("#metrics"), metricsHtml(prev, prevProgress));
       });
     }
 
@@ -98,7 +110,7 @@ export async function render(root, [idParam]) {
         ({ client, snapshot } = await api.snapshot(id));
         draw();
       } catch (err) {
-        toast("error", "Ошибка", err.message);
+        err.status === 429 ? toast("info", "Данные ещё свежие", err.message) : toast("error", "Ошибка", err.message);
       }
     }));
   }

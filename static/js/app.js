@@ -100,9 +100,15 @@ export async function pollSync() {
       if (!st.running) {
         window.dispatchEvent(new CustomEvent("sync:done", { detail: st }));
         if (st.total && st.trigger === "manual") {
-          st.failed
-            ? toast("error", "Сбор завершён с ошибками", `Успешно: ${st.done - st.failed}, с ошибкой: ${st.failed}`)
-            : toast("success", "Данные обновлены", `Клиентов: ${st.done}`);
+          const ok = st.done - st.failed - st.skipped;
+          const parts = [`Обновлено: ${ok}`];
+          if (st.skipped) parts.push(`уже свежие: ${st.skipped}`);
+          if (st.failed) parts.push(`с ошибкой: ${st.failed}`);
+          parts.push(`запросов к сайтам: ${st.requests}`);
+          const text = parts.join(" · ") + (st.note ? `. ${st.note}` : "");
+          if (st.failed) toast("error", "Сбор завершён с ошибками", text);
+          else if (!ok) toast("info", "Данные уже свежие", "Все клиенты обновлялись недавно — запросы на сайты не отправлялись");
+          else toast("success", "Сбор завершён", text);
         }
         break;
       }

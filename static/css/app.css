@@ -483,3 +483,74 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-delay: 0s !important; transition-duration: .001ms !important; }
 }
+
+/* ============ Sales plan bar ("План продаж на очки") ============ */
+.plan-bar {
+  position: relative; overflow: hidden; display: flex; align-items: stretch; gap: 22px;
+  margin-bottom: 14px; padding: 14px 20px; border-radius: var(--radius); color: #fff;
+  background: linear-gradient(115deg, #4f7cff 0%, #8b5cf6 48%, #c084fc 82%, #d8b4fe 100%);
+  box-shadow: 0 14px 34px -18px rgba(139, 92, 246, .8);
+  animation: rise .5s var(--ease) both;
+}
+.plan-bar::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .18) 50%, transparent 70%);
+  transform: translateX(-100%); animation: sheen 2.8s var(--ease) .4s 1;
+}
+@keyframes sheen { to { transform: translateX(100%); } }
+.plan-main { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 7px; }
+.plan-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.plan-title { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; opacity: .92; }
+.plan-title b { font-size: 14px; }
+.plan-days { font-size: 12px; opacity: .9; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plan-segs { display: flex; gap: 3px; }
+.plan-segs i { flex: 1; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .28); animation: barIn .5s var(--ease) both; animation-delay: calc(var(--i) * 12ms); }
+.plan-segs i.past { background: rgba(30, 27, 75, .7); }
+.plan-track { position: relative; height: 7px; border-radius: 6px; background: rgba(255, 255, 255, .25); }
+.plan-track i {
+  position: absolute; left: 0; top: 0; bottom: 0; width: var(--w); border-radius: 6px;
+  background: #22c55e; box-shadow: 0 0 12px rgba(34, 197, 94, .6);
+  transform-origin: left; animation: barIn 1.1s var(--ease) both .15s;
+}
+.plan-track .marker {
+  position: absolute; top: -4px; bottom: -4px; width: 2px; left: var(--m); border-radius: 2px;
+  background: #fff; box-shadow: 0 0 6px rgba(255, 255, 255, .8);
+}
+.plan-sum { font-size: 12px; opacity: .88; font-variant-numeric: tabular-nums; }
+.plan-forecast {
+  flex-shrink: 0; min-width: 140px; padding-left: 22px; text-align: right;
+  border-left: 1px solid rgba(255, 255, 255, .3); display: flex; flex-direction: column; justify-content: center;
+}
+.plan-forecast .lbl { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .8; }
+.plan-forecast .big { font-size: 34px; font-weight: 750; line-height: 1.05; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.plan-forecast .delta {
+  align-self: flex-end; margin-top: 4px; padding: 2px 9px; border-radius: 999px;
+  font-size: 12.5px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: rgba(17, 12, 46, .45); backdrop-filter: blur(4px);
+}
+.plan-forecast .delta.pos { color: #86efac; }
+.plan-forecast .delta.neg { color: #fca5a5; }
+.plan-bar.compact { padding: 10px 16px; }
+.plan-bar.compact .plan-forecast .big { font-size: 26px; }
+@media (max-width: 700px) {
+  .plan-bar { flex-direction: column; gap: 10px; }
+  .plan-forecast { border-left: 0; padding-left: 0; text-align: left; }
+}
+
+/* Plan cell in tables */
+.plan-cell { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 84px; }
+.plan-cell .v { font-weight: 700; }
+.mini-track { width: 84px; height: 4px; border-radius: 4px; background: rgba(255, 255, 255, .08); overflow: hidden; }
+.mini-track i { display: block; height: 100%; width: var(--w); background: linear-gradient(90deg, #4f7cff, #a855f7); border-radius: 4px; }
+.fc-excellent { color: var(--excellent); }
+.fc-good { color: var(--good); }
+.fc-poor { color: var(--poor); }
+
+/* Settings: protection summary */
+.protect-summary {
+  margin-top: 16px; padding: 14px 16px; border-radius: 14px; font-size: 13px; color: var(--text-2);
+  background: rgba(56, 189, 248, .06); border: 1px solid rgba(56, 189, 248, .22);
+}
+.protect-summary b { color: var(--text); }
+.range-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.range-head b { font-variant-numeric: tabular-nums; }

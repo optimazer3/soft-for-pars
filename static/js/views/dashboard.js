@@ -5,6 +5,7 @@ import {
   plural, avatar, debounce, fmtPeriod, hostOf, html, icon, mount, relTime, segmented,
   STATUS_TEXT, toast, withBusy, animateCounters,
 } from "../ui.js";
+import { planBar, planCell } from "../plan.js";
 
 /** One KPI tile. `prev` = previous value for the count-up animation. */
 export function tile(key, m, i = 0, prev) {
@@ -32,7 +33,7 @@ function statusPill(c) {
   return html`<span class="pill ${c.last_status}">${c.last_status === "running" ? icon("refresh", "spin") : ""}${STATUS_TEXT[c.last_status] || c.last_status}</span>`;
 }
 
-function panel(c, keys, i, prevKpi) {
+function panel(c, keys, i, prevSnap) {
   const s = c.snapshot;
   const running = c.last_status === "running";
   return html`<section class="panel" data-id="${c.id}" style="--i:${i}">
@@ -56,7 +57,8 @@ function panel(c, keys, i, prevKpi) {
     </div>
     ${c.last_status === "error" && c.last_error ? html`<div class="error-banner">${icon("alert")}<div><b>Не удалось собрать данные.</b> ${c.last_error}</div></div>` : ""}
     ${s
-      ? html`<div class="tiles stagger">${keys.map((k, j) => tile(k, s.kpi[k], j, prevKpi?.[k]?.current))}</div>`
+      ? html`${planBar(s.progress, s.period, { compact: true, prev: prevSnap?.progress?.forecast_percent })}
+        <div class="tiles stagger">${keys.map((k, j) => tile(k, s.kpi[k], j, prevSnap?.kpi?.[k]?.current))}</div>`
       : html`<div class="empty" style="padding:28px">
           <p style="margin:0 0 14px">Данные ещё не собраны</p>
           <button class="btn btn-primary btn-sm" data-act="sync">${icon("refresh")} Собрать сейчас</button></div>`}
@@ -89,7 +91,12 @@ export async function render(root) {
     const q = query.trim().toLowerCase();
     let list = data.clients.filter((c) => !q || c.name.toLowerCase().includes(q) || c.base_url.includes(q));
     if (mode === "table") {
-      const val = (c) => sort.key === "name" ? c.name.toLowerCase() : (c.snapshot?.kpi[sort.key]?.current ?? -Infinity);
+      const val = (c) => {
+        if (sort.key === "name") return c.name.toLowerCase();
+        if (sort.key === "_exec") return c.snapshot?.progress?.execution_percent ?? -Infinity;
+        if (sort.key === "_forecast") return c.snapshot?.progress?.forecast_percent ?? -Infinity;
+        return c.snapshot?.kpi[sort.key]?.current ?? -Infinity;
+      };
       list = [...list].sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * sort.dir);
     }
     return list;
@@ -135,11 +142,13 @@ export async function render(root) {
     }
     const th = (key, label, num = true) => html`<th class="sortable ${num ? "num" : ""} ${sort.key === key ? `sorted ${sort.dir < 0 ? "desc" : ""}` : ""}" data-sort="${key}">${label}<span class="arrow">▲</span></th>`;
     return html`<div class="table-wrap"><table class="grid kpi-table">
-      <thead><tr>${th("name", "Клиент", false)}${data.key_metrics.map((k) => th(k, metricLabel(k)))}<th></th></tr></thead>
+      <thead><tr>${th("name", "Клиент", false)}${th("_exec", "План продаж")}${th("_forecast", "Прогноз")}${data.key_metrics.map((k) => th(k, metricLabel(k)))}<th></th></tr></thead>
       <tbody>${list.map((c, i) => html`<tr style="--i:${i}" data-id="${c.id}">
         <td><a class="client-cell" href="#/client/${c.id}">${avatar(c.name)}<span>
           <div class="name">${c.name}</div>
           <div class="sub"><span class="dot ${c.last_status}" style="display:inline-block;margin-right:5px"></span>${relTime(c.last_sync_at)}</div></span></a></td>
+        <td class="num">${planCell(c.snapshot?.progress, "exec")}</td>
+        <td class="num">${planCell(c.snapshot?.progress, "forecast")}</td>
         ${data.key_metrics.map((k) => html`<td class="num">${cellKpi(k, c.snapshot?.kpi[k])}</td>`)}
         <td><div class="row-actions"><button class="icon-btn" data-act="sync" title="Обновить">${icon("refresh", c.last_status === "running" ? "spin" : "")}</button></div></td>
       </tr>`)}</tbody></table></div>`;
@@ -183,7 +192,7 @@ export async function render(root) {
           ? toast("success", `${client.name}: данные обновлены`)
           : toast("error", `${client.name}: ошибка сбора`, res.error);
       } catch (err) {
-        toast("error", "Ошибка", err.message);
+        err.status === 429 ? toast("info", "Данные ещё свежие", err.message) : toast("error", "Ошибка", err.message);
       }
     });
     await refresh([id]);
@@ -194,7 +203,7 @@ export async function render(root) {
     const old = data;
     try { data = await api.dashboard(); } catch { return; }
     if (!root.isConnected) return;
-    const prevKpi = Object.fromEntries(old.clients.map((c) => [c.id, c.snapshot?.kpi]));
+    const prevKpi = Object.fromEntries(old.clients.map((c) => [c.id, c.snapshot]));
     const changed = data.clients.filter((c) => {
       const o = old.clients.find((x) => x.id === c.id);
       return !o || o.last_sync_at !== c.last_sync_at || o.last_status !== c.last_status;

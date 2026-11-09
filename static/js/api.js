@@ -16,7 +16,9 @@ async function request(method, url, body) {
   if (!resp.ok) {
     let msg = data?.detail ?? `Ошибка ${resp.status}`;
     if (Array.isArray(msg)) msg = msg.map((d) => d.msg?.replace(/^Value error, /, "")).join("; ");
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = resp.status;
+    throw err;
   }
   return data;
 }

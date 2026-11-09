@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from . import db
-from .collector import collector
+from .collector import CooldownError, collector
 from .crypto import decrypt, encrypt
 from .optimizer import OptimizerError, normalize_base_url
 from .scheduler import next_slot, scheduler_loop
@@ -79,7 +79,9 @@ class TestIn(BaseModel):
 class SettingsIn(BaseModel):
     schedule_enabled: bool
     schedule_times: list[str]
-    concurrency: int = Field(ge=1, le=20)
+    concurrency: int = Field(ge=1, le=5)
+    request_interval_ms: int = Field(ge=200, le=5000)
+    cooldown_min: int = Field(ge=0, le=180)
 
     @field_validator("schedule_times")
     @classmethod
@@ -180,7 +182,10 @@ async def test_connection(body: TestIn):
 @app.post("/api/clients/{client_id}/sync")
 async def sync_client(client_id: int):
     get_client_or_404(client_id)
-    result = await collector.sync_client(client_id)
+    try:
+        result = await collector.sync_client(client_id)
+    except CooldownError as exc:
+        raise HTTPException(429, str(exc)) from None
     return {**result, "client": get_client_or_404(client_id)}
 
 
@@ -204,7 +209,7 @@ def dashboard():
     clients = db.query(f"SELECT {CLIENT_COLUMNS} FROM clients ORDER BY name COLLATE NOCASE")
     snaps = {
         r["client_id"]: r for r in db.query(
-            "SELECT s.client_id, s.period, s.fetched_at, s.source_updated_at, s.kpi_json, "
+            "SELECT s.client_id, s.period, s.fetched_at, s.source_updated_at, s.kpi_json, s.progress_json, "
             "       json_array_length(s.branches_json) AS branches_count "
             "FROM snapshots s JOIN (SELECT client_id, MAX(fetched_at) AS m FROM snapshots GROUP BY client_id) l "
             "  ON l.client_id = s.client_id AND l.m = s.fetched_at"
@@ -220,6 +225,7 @@ def dashboard():
                 "period": s["period"], "fetched_at": s["fetched_at"],
                 "source_updated_at": s["source_updated_at"], "branches_count": s["branches_count"],
                 "kpi": {k: kpi[k] for k in KEY_METRICS if k in kpi},
+                "progress": json.loads(s["progress_json"]) if s["progress_json"] else None,
             }
         else:
             item["snapshot"] = None
