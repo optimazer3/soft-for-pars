@@ -1,0 +1,6 @@
+# Local data: database with client credentials and the encryption key
+data/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
