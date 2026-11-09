@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +19,6 @@ load_env()
 
 from . import auth, db  # noqa: E402
 from .collector import CooldownError, collector
-from .crypto import decrypt, encrypt
 from .optimizer import OptimizerError, normalize_base_url
 from .scheduler import next_slot, scheduler_loop
 
@@ -57,7 +57,7 @@ async def require_login(request: Request, call_next):
     """Every /api/* call needs a valid session cookie (except login itself)."""
     path = request.url.path
     if path.startswith("/api/") and path not in PUBLIC_API:
-        if not auth.read_session(request.cookies.get(auth.COOKIE_NAME)):
+        if not await asyncio.to_thread(auth.read_session, request.cookies.get(auth.COOKIE_NAME)):
             return JSONResponse({"detail": "Требуется вход"}, status_code=401)
     return await call_next(request)
 
@@ -76,8 +76,8 @@ class CredentialsIn(BaseModel):
     new_password: str = Field(min_length=8, max_length=200)
 
 
-def _set_session_cookie(request: Request, response: Response, remember: bool) -> None:
-    value, ttl = auth.make_session(remember)
+def _set_session_cookie(request: Request, response: Response, login: str, remember: bool) -> None:
+    value, ttl = auth.make_session(login, remember)
     response.set_cookie(
         auth.COOKIE_NAME, value, max_age=ttl if remember else None, httponly=True,
         samesite="lax", secure=request.url.scheme == "https", path="/",
@@ -90,16 +90,16 @@ async def login(body: LoginIn, request: Request, response: Response):
     locked = auth.lock_remaining(ip)
     if locked:
         raise HTTPException(429, f"Слишком много неудачных попыток. Попробуйте через {locked} с")
-    ok = await asyncio.to_thread(auth.check_credentials, body.login, body.password)
-    if not ok:
+    login_name = await asyncio.to_thread(auth.check_credentials, body.login, body.password)
+    if not login_name:
         await asyncio.sleep(0.6)  # slows down guessing
         lock = auth.register_failure(ip)
         if lock:
             raise HTTPException(429, f"Слишком много неудачных попыток. Вход заблокирован на {lock} с")
         raise HTTPException(401, "Неверный логин или пароль")
     auth.register_success(ip)
-    _set_session_cookie(request, response, body.remember)
-    return {"login": auth.account()["login"]}
+    await asyncio.to_thread(_set_session_cookie, request, response, login_name, body.remember)
+    return {"login": login_name}
 
 
 @app.post("/api/auth/logout")
@@ -118,13 +118,18 @@ def me(request: Request):
 
 @app.put("/api/auth/credentials")
 async def change_credentials(body: CredentialsIn, request: Request, response: Response):
-    ok = await asyncio.to_thread(auth.verify_password, body.current_password, auth.account()["hash"])
-    if not ok:
+    login_name = await asyncio.to_thread(auth.read_session, request.cookies.get(auth.COOKIE_NAME))
+    stored = await asyncio.to_thread(auth.current_password, login_name or "")
+    if stored is None or not hmac.compare_digest(body.current_password.encode(), stored.encode()):
         await asyncio.sleep(0.6)
         raise HTTPException(400, "Текущий пароль указан неверно")
-    await asyncio.to_thread(auth.change_credentials, body.new_login, body.new_password)
-    _set_session_cookie(request, response, True)  # other sessions are logged out
-    return {"login": auth.account()["login"]}
+    try:
+        await asyncio.to_thread(auth.change_credentials, login_name, body.new_login, body.new_password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    new_login = body.new_login.strip()
+    await asyncio.to_thread(_set_session_cookie, request, response, new_login, True)  # other sessions end
+    return {"login": new_login}
 
 
 # ---------- models ----------
@@ -188,6 +193,7 @@ CLIENT_COLUMNS = ("id, name, base_url, login, enabled, notes, created_at, update
 def public_client(row: dict) -> dict:
     row = dict(row)
     row.pop("password_enc", None)
+    row.pop("password", None)
     return row
 
 
@@ -215,9 +221,9 @@ def create_client(body: ClientIn):
     if not body.password:
         raise HTTPException(422, "Укажите пароль")
     row = db.query_one(
-        "INSERT INTO app.clients(name, base_url, login, password_enc, enabled, notes) "
+        "INSERT INTO app.clients(name, base_url, login, password, enabled, notes) "
         "VALUES(%s, %s, %s, %s, %s, %s) RETURNING id",
-        (body.name, body.base_url, body.login, encrypt(body.password), body.enabled, body.notes),
+        (body.name, body.base_url, body.login, body.password, body.enabled, body.notes),
     )
     return get_client_or_404(row["id"])
 
@@ -228,7 +234,7 @@ def update_client(client_id: int, body: ClientIn):
     fields = {"name": body.name, "base_url": body.base_url, "login": body.login,
               "enabled": body.enabled, "notes": body.notes, "updated_at": db.now()}
     if body.password:
-        fields["password_enc"] = encrypt(body.password)
+        fields["password"] = body.password
     sets = ", ".join(f"{k} = %({k})s" for k in fields)
     db.execute(f"UPDATE app.clients SET {sets} WHERE id = %(id)s", {**fields, "id": client_id})
     return get_client_or_404(client_id)
@@ -249,7 +255,7 @@ async def test_connection(body: TestIn):
             raise HTTPException(404, "Клиент не найден")
         base_url = base_url or row["base_url"]
         login = login or row["login"]
-        password = decrypt(row["password_enc"])
+        password = row["password"]
     if not (base_url and login and password):
         raise HTTPException(422, "Заполните адрес, логин и пароль")
     try:

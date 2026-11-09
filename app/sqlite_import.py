@@ -3,7 +3,7 @@
 Run:  python run.py --import-sqlite   (or start.bat --import-sqlite)
 
 Safe to run more than once: existing rows are left untouched.
-Encrypted client passwords are copied as-is, so keep data/secret.key — it decrypts them.
+Client passwords are decrypted with data/secret.key and stored in plain text.
 """
 from __future__ import annotations
 
@@ -15,10 +15,21 @@ from pathlib import Path
 from psycopg.types.json import Jsonb
 
 from . import db
+from .crypto import decrypt
 
 
 def _ts(v):
     return datetime.fromisoformat(v) if isinstance(v, str) and v else None
+
+
+def _plain(r: dict) -> str | None:
+    if r.get("password"):
+        return r["password"]
+    try:
+        return decrypt(r["password_enc"])
+    except Exception:  # noqa: BLE001 - no key: the password has to be entered again
+        print(f"  Клиент «{r['name']}»: пароль не расшифрован (нет data/secret.key) — укажите его заново.")
+        return None
 
 
 def import_sqlite(path: str) -> None:
@@ -46,12 +57,12 @@ def import_sqlite(path: str) -> None:
         for r in clients:
             cur = c.execute(
                 """
-                INSERT INTO app.clients(id, name, base_url, login, password_enc, enabled, notes,
+                INSERT INTO app.clients(id, name, base_url, login, password, enabled, notes,
                                     created_at, updated_at, last_sync_at, last_status, last_error)
                 VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO NOTHING
                 """,
-                (r["id"], r["name"], r["base_url"], r["login"], r["password_enc"], bool(r["enabled"]),
+                (r["id"], r["name"], r["base_url"], r["login"], _plain(r), bool(r["enabled"]),
                  r.get("notes") or "", _ts(r["created_at"]) or db.now(), _ts(r["updated_at"]) or db.now(),
                  _ts(r.get("last_sync_at")),
                  "error" if r.get("last_status") == "running" else (r.get("last_status") or "never"),

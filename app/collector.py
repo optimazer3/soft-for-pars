@@ -19,7 +19,6 @@ from urllib.parse import urlsplit
 import httpx
 
 from . import db
-from .crypto import decrypt
 from .optimizer import OptimizerClient, OptimizerError, ServerBusyError
 from .throttle import Throttle, ThrottleConfig, domain_of
 
@@ -133,7 +132,9 @@ class Collector:
             self.state.active.append(client_id)
             await adb(db.execute, "UPDATE app.clients SET last_status = 'running' WHERE id = %s", (client_id,))
             try:
-                client = self._client(row["base_url"], row["login"], decrypt(row["password_enc"]))
+                if not row.get("password"):
+                    raise OptimizerError("Не задан пароль клиента — укажите его в редактировании клиента")
+                client = self._client(row["base_url"], row["login"], row["password"])
                 res = await client.collect()
                 await adb(db.save_snapshot, client_id, res.period, res.source_updated_at,
                           res.kpi, res.branches, res.progress)

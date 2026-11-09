@@ -70,7 +70,7 @@ export async function render(root) {
       </div>
       <form class="card" id="acc-form" autocomplete="off" novalidate>
         <h3>Вход на этот сайт</h3>
-        <p class="hint">Смените логин или пароль. Все, кто вошёл со старым паролем, будут разлогинены.</p>
+        <p class="hint">Смените свой логин или пароль — ваши остальные сессии завершатся. Других пользователей можно добавлять в Supabase: таблица <code>app.users</code>.</p>
         <div class="field"><input id="acc-login" placeholder=" " value="${me.login}" autocomplete="username"><label for="acc-login">Логин</label></div>
         <div class="field"><input id="acc-new" type="password" placeholder=" " autocomplete="new-password"><label for="acc-new">Новый пароль (от 8 символов)</label></div>
         <div class="field"><input id="acc-cur" type="password" placeholder=" " autocomplete="current-password"><label for="acc-cur">Текущий пароль</label></div>

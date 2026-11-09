@@ -40,10 +40,10 @@ def main() -> None:
             import_sqlite(args.import_sqlite)
             return
         if args.reset_login:
-            version = int(db.get_settings().get("auth_version") or 1)
-            db.delete_settings(["auth_login", "auth_hash"])
-            db.set_settings({"auth_version": version + 1})
-            print("Логин и пароль сброшены к исходному мастер-паролю. Все сессии завершены.")
+            db.execute("DELETE FROM app.users")
+            db.delete_settings(["auth_login", "auth_hash", "auth_version"])
+            print("Пользователи удалены: вход снова по логину admin и исходному мастер-паролю. "
+                  "Все сессии завершены.")
             return
     finally:
         db.close()  # the server opens its own connections

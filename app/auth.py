@@ -1,10 +1,12 @@
-"""Login with a single master account.
+"""Login for the dashboard.
 
-* Password hashes use scrypt; the plain password is never stored anywhere.
-* The default account (admin) ships as a hash only. It can be changed in Settings;
-  the new hash is stored in the local database and overrides the default.
-* Sessions are HMAC-signed cookies (HttpOnly, SameSite=Lax). Changing the password
-  bumps a version number, which logs out every existing session.
+* Users live in the table app.users (login + password in plain text, as requested by the owner),
+  so they can be added or edited directly in Supabase.
+* Until the table has a user, the built-in account "admin" with the master password works
+  (only its scrypt hash is in the code). The first successful login stores it in app.users.
+* Sessions are HMAC-signed cookies (HttpOnly, SameSite=Lax). The cookie carries a fingerprint
+  of the user's password, so changing the password — in Settings or directly in the database —
+  logs out every existing session of that user. Deleting the user logs them out too.
 * Brute-force protection: after a few wrong attempts from one IP the login is locked
   for a growing period.
 """
@@ -55,31 +57,62 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(dk, expected)
 
 
-# ---------- account ----------
+# ---------- users (cached: checked on every request) ----------
 
-def account() -> dict:
-    s = db.get_settings()
-    return {
-        "login": s.get("auth_login") or DEFAULT_LOGIN,
-        "hash": s.get("auth_hash") or DEFAULT_HASH,
-        "version": int(s.get("auth_version") or 1),
-    }
+_users_cache: tuple[float, dict[str, dict]] | None = None
+USERS_TTL = 5.0
 
 
-def check_credentials(login: str, password: str) -> bool:
-    acc = account()
-    login_ok = hmac.compare_digest(login.strip().lower().encode(), acc["login"].lower().encode())
-    password_ok = verify_password(password, acc["hash"])  # always run: same timing for wrong logins
-    return login_ok and password_ok
+def _users() -> dict[str, dict]:
+    global _users_cache
+    if _users_cache and time.monotonic() - _users_cache[0] < USERS_TTL:
+        return _users_cache[1]
+    users = {r["login"].lower(): r for r in db.query("SELECT id, login, password FROM app.users")}
+    _users_cache = (time.monotonic(), users)
+    return users
 
 
-def change_credentials(new_login: str, new_password: str) -> None:
-    acc = account()
-    db.set_settings({
-        "auth_login": new_login.strip(),
-        "auth_hash": hash_password(new_password),
-        "auth_version": acc["version"] + 1,
-    })
+def invalidate_cache() -> None:
+    global _users_cache
+    _users_cache = None
+
+
+def check_credentials(login: str, password: str) -> str | None:
+    """Returns the canonical login on success."""
+    login = login.strip()
+    users = _users()
+    if users:
+        user = users.get(login.lower())
+        stored = user["password"] if user else secrets.token_hex(16)  # same timing for unknown logins
+        if hmac.compare_digest(password.encode(), stored.encode()) and user:
+            return user["login"]
+        return None
+    # No users yet: the built-in master account (or the one changed in Settings by an older
+    # version, stored as a hash). On success it is saved to app.users in plain text.
+    st = db.get_settings()
+    base_login = st.get("auth_login") or DEFAULT_LOGIN
+    if login.lower() == base_login.lower() and verify_password(password, st.get("auth_hash") or DEFAULT_HASH):
+        db.execute("INSERT INTO app.users(login, password) VALUES(%s, %s) ON CONFLICT DO NOTHING",
+                   (base_login, password))
+        db.delete_settings(["auth_login", "auth_hash", "auth_version"])
+        invalidate_cache()
+        return base_login
+    return None
+
+
+def current_password(login: str) -> str | None:
+    user = _users().get(login.lower())
+    return user["password"] if user else None
+
+
+def change_credentials(old_login: str, new_login: str, new_password: str) -> None:
+    new_login = new_login.strip()
+    other = _users().get(new_login.lower())
+    if other and other["login"].lower() != old_login.lower():
+        raise ValueError("Такой логин уже занят")
+    db.execute("UPDATE app.users SET login = %s, password = %s, updated_at = now() WHERE lower(login) = lower(%s)",
+               (new_login, new_password, old_login))
+    invalidate_cache()
 
 
 # ---------- sessions (signed cookies) ----------
@@ -97,11 +130,16 @@ def _sign(payload: str) -> str:
     return hmac.new(_session_key(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-def make_session(remember: bool) -> tuple[str, int]:
+def _fingerprint(password: str) -> str:
+    return hmac.new(_session_key(), b"pw:" + password.encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def make_session(login: str, remember: bool) -> tuple[str, int]:
     """Returns (cookie value, max-age seconds)."""
     ttl = SESSION_DAYS_REMEMBER * 86400 if remember else SESSION_HOURS_DEFAULT * 3600
-    acc = account()
-    payload = f"{acc['login']}|{int(time.time()) + ttl}|{acc['version']}|{secrets.token_hex(8)}"
+    pw = current_password(login) or ""
+    login_b64 = base64.urlsafe_b64encode(login.encode()).decode()
+    payload = f"{login_b64}|{int(time.time()) + ttl}|{_fingerprint(pw)}|{secrets.token_hex(8)}"
     token = base64.urlsafe_b64encode(payload.encode()).decode()
     return f"{token}.{_sign(payload)}", ttl
 
@@ -113,13 +151,14 @@ def read_session(cookie: str | None) -> str | None:
     token, sig = cookie.rsplit(".", 1)
     try:
         payload = base64.urlsafe_b64decode(token.encode()).decode()
-        login, expires, version, _ = payload.split("|")
+        login_b64, expires, fingerprint, _ = payload.split("|")
+        login = base64.urlsafe_b64decode(login_b64.encode()).decode()
     except (ValueError, UnicodeDecodeError):
         return None
-    if not hmac.compare_digest(sig, _sign(payload)):
+    if not hmac.compare_digest(sig, _sign(payload)) or int(expires) < time.time():
         return None
-    acc = account()
-    if int(expires) < time.time() or int(version) != acc["version"] or login != acc["login"]:
+    pw = current_password(login)
+    if pw is None or not hmac.compare_digest(fingerprint, _fingerprint(pw)):
         return None
     return login
 
