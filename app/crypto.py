@@ -1,10 +1,11 @@
 """Encryption of client passwords at rest.
 
-The key is generated on first run and stored in data/secret.key.
-Keep that file next to the database: without it saved passwords cannot be decrypted.
+The key is generated on first run and stored in data/secret.key (or given as SECRET_KEY).
+Only ciphertext goes to the database; without this key saved passwords cannot be decrypted.
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 
 from cryptography.fernet import Fernet
@@ -16,6 +17,9 @@ KEY_PATH = DATA_DIR / "secret.key"
 
 @lru_cache(maxsize=1)
 def _fernet() -> Fernet:
+    # On a server the key can come from the environment instead of a file.
+    if os.environ.get("SECRET_KEY"):
+        return Fernet(os.environ["SECRET_KEY"].strip().encode())
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not KEY_PATH.exists():
         KEY_PATH.write_bytes(Fernet.generate_key())

@@ -4,3 +4,6 @@ data/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Secrets: database connection string
+.env

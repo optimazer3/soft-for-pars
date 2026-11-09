@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import os
 import secrets
 import time
 from collections import defaultdict
@@ -84,6 +85,8 @@ def change_credentials(new_login: str, new_password: str) -> None:
 # ---------- sessions (signed cookies) ----------
 
 def _session_key() -> bytes:
+    if os.environ.get("SESSION_KEY"):
+        return os.environ["SESSION_KEY"].strip().encode()
     db.DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not SESSION_KEY_PATH.exists():
         SESSION_KEY_PATH.write_bytes(secrets.token_bytes(32))

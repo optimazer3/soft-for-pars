@@ -1,6 +1,6 @@
 // Settings: collection schedule and parallelism.
 import { api } from "../api.js";
-import { fmtTime, html, icon, mount, toast, withBusy } from "../ui.js";
+import { fmtTime, html, icon, mount, plural, toast, withBusy } from "../ui.js";
 
 export async function render(root) {
   const [s, me] = await Promise.all([api.settings(), api.me()]);
@@ -47,6 +47,12 @@ export async function render(root) {
           <input type="range" class="range" id="cd" min="0" max="60" step="5" value="${s.cooldown_min}">
           <div class="protect-summary" id="estimate"></div>
         </div>
+        <div class="setting-row" style="display:block">
+          <div class="range-head"><span class="t">Хранить снимки данных</span><b id="ret-v"></b></div>
+          <div class="d" style="margin-bottom:10px">Старые снимки удаляются автоматически, последний снимок каждого клиента остаётся всегда.
+            Клиенты, настройки и учётная запись хранятся постоянно.</div>
+          <input type="range" class="range" id="ret" min="1" max="30" value="${s.snapshot_retention_days}">
+        </div>
         <div class="form-actions" style="margin-top:18px">
           <button class="btn btn-primary" id="save">${icon("check")} Сохранить</button>
         </div>
@@ -57,7 +63,7 @@ export async function render(root) {
         <ol>
           <li>Программа должна быть запущена (окно <code>start.bat</code> открыто) — тогда сбор идёт по расписанию.</li>
           <li>Кнопка «Обновить всех» вверху запускает сбор вне расписания.</li>
-          <li>Каждый сбор сохраняется: за день хранится последний снимок по каждому клиенту.</li>
+          <li>Данные хранятся в базе Supabase: за день — последний снимок по каждому клиенту, старше выбранного срока — удаляются.</li>
           <li>Если сайт отвечает ошибками или просит притормозить, программа делает паузу и повторяет позже. Если сервер не справляется у нескольких клиентов подряд — сбор по этому домену останавливается до следующего запуска.</li>
         </ol>
         <p id="next" style="margin-top:14px"></p>
@@ -107,6 +113,7 @@ export async function render(root) {
     $("#conc-v").textContent = conc;
     $("#int-v").textContent = `${interval.toLocaleString("ru-RU")} с`;
     $("#cd-v").textContent = cd ? `${cd} мин` : "без ограничения";
+    $("#ret-v").textContent = plural(+$("#ret").value, "день", "дня", "дней");
     // ~11 requests per client (3 salons); the Optimizer answers in ~2 s per request.
     const RESP = 2;
     const perClient = 11 * Math.max(interval, RESP);
@@ -116,7 +123,7 @@ export async function render(root) {
       Нагрузка на домен — не больше <b>${rate.toLocaleString("ru-RU", { maximumFractionDigits: 1 })} запроса/с</b>.
       Сбор 50 клиентов займёт ~<b>${minutes(50)} мин</b>, 100 клиентов — ~<b>${minutes(100)} мин</b>.`);
   };
-  ["#conc", "#int", "#cd"].forEach((q) => $(q).addEventListener("input", drawProtect));
+  ["#conc", "#int", "#cd", "#ret"].forEach((q) => $(q).addEventListener("input", drawProtect));
   drawProtect();
 
   $("#acc-form").addEventListener("submit", async (e) => {
@@ -150,6 +157,7 @@ export async function render(root) {
         concurrency: +$("#conc").value,
         request_interval_ms: +$("#int").value,
         cooldown_min: +$("#cd").value,
+        snapshot_retention_days: +$("#ret").value,
       });
       times = res.schedule_times;
       drawTimes();

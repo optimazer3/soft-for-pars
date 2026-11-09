@@ -55,7 +55,7 @@ def next_slot(times: list[str], now: datetime) -> datetime | None:
 async def scheduler_loop() -> None:
     while True:
         try:
-            s = db.get_settings()
+            s = await asyncio.to_thread(db.get_settings)
             if s.get("schedule_enabled"):
                 now = datetime.now().astimezone()
                 due = latest_due_slot(s.get("schedule_times", []), now)
@@ -63,7 +63,7 @@ async def scheduler_loop() -> None:
                 last_dt = datetime.fromisoformat(last) if last else None
                 if due and (last_dt is None or last_dt < due) and not collector.state.running:
                     log.info("scheduled run for slot %s", due.isoformat())
-                    db.set_settings({"last_scheduled_run": now.isoformat(timespec="seconds")})
+                    await asyncio.to_thread(db.set_settings, {"last_scheduled_run": now.isoformat(timespec="seconds")})
                     await collector.sync_all(trigger="schedule")
         except Exception:  # noqa: BLE001 - the loop must never die
             log.exception("scheduler tick failed")

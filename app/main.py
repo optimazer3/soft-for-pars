@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -13,7 +12,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from . import auth, db
+from .env import load_env
+
+load_env()
+
+from . import auth, db  # noqa: E402
 from .collector import CooldownError, collector
 from .crypto import decrypt, encrypt
 from .optimizer import OptimizerError, normalize_base_url
@@ -33,13 +36,15 @@ KEY_METRICS = [
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
-    db.conn()
-    db.execute("UPDATE clients SET last_status = 'error', last_error = 'Сбор прерван' "
+    db.init()
+    db.execute("UPDATE app.clients SET last_status = 'error', last_error = 'Сбор прерван' "
                "WHERE last_status = 'running'")
+    db.prune_snapshots(int(db.get_settings().get("snapshot_retention_days") or 7))
     task = asyncio.create_task(scheduler_loop())
     yield
     task.cancel()
     await collector.close()
+    db.close()
 
 
 app = FastAPI(title="Optimizer Dashboard", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -159,6 +164,7 @@ class SettingsIn(BaseModel):
     concurrency: int = Field(ge=1, le=5)
     request_interval_ms: int = Field(ge=200, le=5000)
     cooldown_min: int = Field(ge=0, le=180)
+    snapshot_retention_days: int = Field(ge=1, le=90)
 
     @field_validator("schedule_times")
     @classmethod
@@ -182,12 +188,11 @@ CLIENT_COLUMNS = ("id, name, base_url, login, enabled, notes, created_at, update
 def public_client(row: dict) -> dict:
     row = dict(row)
     row.pop("password_enc", None)
-    row["enabled"] = bool(row["enabled"])
     return row
 
 
 def get_client_or_404(client_id: int) -> dict:
-    row = db.query_one(f"SELECT {CLIENT_COLUMNS} FROM clients WHERE id = ?", (client_id,))
+    row = db.query_one(f"SELECT {CLIENT_COLUMNS} FROM app.clients WHERE id = %s", (client_id,))
     if not row:
         raise HTTPException(404, "Клиент не найден")
     return public_client(row)
@@ -197,7 +202,7 @@ def get_client_or_404(client_id: int) -> dict:
 
 @app.get("/api/clients")
 def list_clients():
-    return [public_client(r) for r in db.query(f"SELECT {CLIENT_COLUMNS} FROM clients ORDER BY name COLLATE NOCASE")]
+    return [public_client(r) for r in db.query(f"SELECT {CLIENT_COLUMNS} FROM app.clients ORDER BY lower(name)")]
 
 
 @app.get("/api/clients/{client_id}")
@@ -209,38 +214,37 @@ def get_client(client_id: int):
 def create_client(body: ClientIn):
     if not body.password:
         raise HTTPException(422, "Укажите пароль")
-    ts = db.now_iso()
-    cid = db.execute(
-        "INSERT INTO clients(name, base_url, login, password_enc, enabled, notes, created_at, updated_at) "
-        "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-        (body.name, body.base_url, body.login, encrypt(body.password), int(body.enabled), body.notes, ts, ts),
+    row = db.query_one(
+        "INSERT INTO app.clients(name, base_url, login, password_enc, enabled, notes) "
+        "VALUES(%s, %s, %s, %s, %s, %s) RETURNING id",
+        (body.name, body.base_url, body.login, encrypt(body.password), body.enabled, body.notes),
     )
-    return get_client_or_404(cid)
+    return get_client_or_404(row["id"])
 
 
 @app.put("/api/clients/{client_id}")
 def update_client(client_id: int, body: ClientIn):
     get_client_or_404(client_id)
     fields = {"name": body.name, "base_url": body.base_url, "login": body.login,
-              "enabled": int(body.enabled), "notes": body.notes, "updated_at": db.now_iso()}
+              "enabled": body.enabled, "notes": body.notes, "updated_at": db.now()}
     if body.password:
         fields["password_enc"] = encrypt(body.password)
-    sets = ", ".join(f"{k} = :{k}" for k in fields)
-    db.execute(f"UPDATE clients SET {sets} WHERE id = :id", {**fields, "id": client_id})
+    sets = ", ".join(f"{k} = %({k})s" for k in fields)
+    db.execute(f"UPDATE app.clients SET {sets} WHERE id = %(id)s", {**fields, "id": client_id})
     return get_client_or_404(client_id)
 
 
 @app.delete("/api/clients/{client_id}", status_code=204)
 def delete_client(client_id: int):
     get_client_or_404(client_id)
-    db.execute("DELETE FROM clients WHERE id = ?", (client_id,))
+    db.execute("DELETE FROM app.clients WHERE id = %s", (client_id,))
 
 
 @app.post("/api/clients/test")
 async def test_connection(body: TestIn):
     base_url, login, password = body.base_url, body.login, body.password
     if body.client_id and not password:
-        row = db.query_one("SELECT * FROM clients WHERE id = ?", (body.client_id,))
+        row = await asyncio.to_thread(db.query_one, "SELECT * FROM app.clients WHERE id = %s", (body.client_id,))
         if not row:
             raise HTTPException(404, "Клиент не найден")
         base_url = base_url or row["base_url"]
@@ -258,12 +262,12 @@ async def test_connection(body: TestIn):
 
 @app.post("/api/clients/{client_id}/sync")
 async def sync_client(client_id: int):
-    get_client_or_404(client_id)
+    await asyncio.to_thread(get_client_or_404, client_id)
     try:
         result = await collector.sync_client(client_id)
     except CooldownError as exc:
         raise HTTPException(429, str(exc)) from None
-    return {**result, "client": get_client_or_404(client_id)}
+    return {**result, "client": await asyncio.to_thread(get_client_or_404, client_id)}
 
 
 @app.post("/api/sync", status_code=202)
@@ -283,29 +287,31 @@ def sync_status():
 
 @app.get("/api/dashboard")
 def dashboard():
-    clients = db.query(f"SELECT {CLIENT_COLUMNS} FROM clients ORDER BY name COLLATE NOCASE")
+    clients = db.query(f"SELECT {CLIENT_COLUMNS} FROM app.clients ORDER BY lower(name)")
+    # Newest snapshot per client; only the key metrics travel over the network.
     snaps = {
         r["client_id"]: r for r in db.query(
-            "SELECT s.client_id, s.period, s.fetched_at, s.source_updated_at, s.kpi_json, s.progress_json, "
-            "       json_array_length(s.branches_json) AS branches_count "
-            "FROM snapshots s JOIN (SELECT client_id, MAX(fetched_at) AS m FROM snapshots GROUP BY client_id) l "
-            "  ON l.client_id = s.client_id AND l.m = s.fetched_at"
+            """
+            SELECT DISTINCT ON (s.client_id)
+                   s.client_id, s.period, s.fetched_at, s.source_updated_at, s.progress,
+                   jsonb_array_length(s.branches) AS branches_count,
+                   (SELECT coalesce(jsonb_object_agg(k, s.kpi -> k), '{}'::jsonb)
+                      FROM unnest(%s::text[]) AS k WHERE s.kpi ? k) AS kpi
+            FROM app.snapshots s
+            ORDER BY s.client_id, s.fetched_at DESC
+            """,
+            (KEY_METRICS,),
         )
     }
     out = []
     for c in clients:
         item = public_client(c)
         s = snaps.get(c["id"])
-        if s:
-            kpi = json.loads(s["kpi_json"])
-            item["snapshot"] = {
-                "period": s["period"], "fetched_at": s["fetched_at"],
-                "source_updated_at": s["source_updated_at"], "branches_count": s["branches_count"],
-                "kpi": {k: kpi[k] for k in KEY_METRICS if k in kpi},
-                "progress": json.loads(s["progress_json"]) if s["progress_json"] else None,
-            }
-        else:
-            item["snapshot"] = None
+        item["snapshot"] = {
+            "period": s["period"], "fetched_at": s["fetched_at"],
+            "source_updated_at": s["source_updated_at"], "branches_count": s["branches_count"],
+            "kpi": s["kpi"], "progress": s["progress"],
+        } if s else None
         out.append(item)
     s = db.get_settings()
     nxt = next_slot(s["schedule_times"], datetime.now().astimezone()) if s["schedule_enabled"] else None
@@ -325,18 +331,22 @@ def client_snapshot(client_id: int):
 
 # ---------- settings ----------
 
+PUBLIC_SETTINGS = ("schedule_enabled", "schedule_times", "concurrency", "request_interval_ms",
+                   "cooldown_min", "snapshot_retention_days")
+
+
 @app.get("/api/settings")
 def get_settings():
     s = db.get_settings()
     nxt = next_slot(s["schedule_times"], datetime.now().astimezone()) if s["schedule_enabled"] else None
-    return {**s, "next_run": nxt.isoformat(timespec="minutes") if nxt else None}
+    return {**{k: s[k] for k in PUBLIC_SETTINGS}, "next_run": nxt.isoformat(timespec="minutes") if nxt else None}
 
 
 @app.put("/api/settings")
 def put_settings(body: SettingsIn):
-    db.set_settings(body.model_dump())
-    # Don't treat slots that already passed today as "missed" after a schedule change.
-    db.set_settings({"last_scheduled_run": db.now_iso()})
+    # last_scheduled_run = now: slots that already passed today are not treated as "missed".
+    db.set_settings({**body.model_dump(), "last_scheduled_run": db.now_iso()})
+    db.prune_snapshots(body.snapshot_retention_days)
     return get_settings()
 
 
