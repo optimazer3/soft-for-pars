@@ -87,6 +87,7 @@ MIGRATIONS = [
     # Older versions stored client passwords encrypted (password_enc): keep the column nullable
     # until migrate_client_passwords() has converted every row.
     f"ALTER TABLE {SCHEMA_NAME}.clients ADD COLUMN IF NOT EXISTS password text",
+    f"ALTER TABLE {SCHEMA_NAME}.snapshots ADD COLUMN IF NOT EXISTS extras jsonb",
     f"""
     DO $$
     BEGIN
@@ -277,28 +278,30 @@ def delete_settings(keys: list[str]) -> None:
 # ---------- snapshots ----------
 
 def save_snapshot(client_id: int, period: str, source_updated_at: str | None,
-                  kpi: dict, branches: list[dict], progress: dict | None = None) -> None:
+                  kpi: dict, branches: list[dict], progress: dict | None = None,
+                  extras: dict | None = None) -> None:
     ts = now()
     execute(
         """
-        INSERT INTO app.snapshots(client_id, day, period, fetched_at, source_updated_at, kpi, branches, progress)
-        VALUES(%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO app.snapshots(client_id, day, period, fetched_at, source_updated_at, kpi, branches, progress, extras)
+        VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT(client_id, day) DO UPDATE SET
             period = excluded.period,
             fetched_at = excluded.fetched_at,
             source_updated_at = excluded.source_updated_at,
             kpi = excluded.kpi,
             branches = excluded.branches,
-            progress = excluded.progress
+            progress = excluded.progress,
+            extras = excluded.extras
         """,
         (client_id, ts.date(), period, ts, source_updated_at, Jsonb(kpi), Jsonb(branches),
-         Jsonb(progress) if progress is not None else None),
+         Jsonb(progress) if progress is not None else None, Jsonb(extras or {})),
     )
 
 
 def latest_snapshot(client_id: int) -> dict | None:
     return query_one(
-        "SELECT client_id, day, period, fetched_at, source_updated_at, kpi, branches, progress "
+        "SELECT client_id, day, period, fetched_at, source_updated_at, kpi, branches, progress, extras "
         "FROM app.snapshots WHERE client_id = %s ORDER BY fetched_at DESC LIMIT 1",
         (client_id,),
     )

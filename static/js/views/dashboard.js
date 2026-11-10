@@ -5,7 +5,8 @@ import {
   animateCounters, avatar, debounce, fmtPeriod, hostOf, html, icon, mount, plural, refreshRelTimes,
   relSpan, segmented, STATUS_TEXT, syncErrorToast, toast, withBusy,
 } from "../ui.js";
-import { planCell, planRow } from "../plan.js";
+import { planCell } from "../plan.js";
+import { dataDate, hoursCell, ratioCell, summaryGrid, tasksStatus } from "../summary.js";
 
 /** One KPI tile. `prev` = previous value for the count-up animation. */
 export function tile(key, m, i = 0, prev) {
@@ -50,6 +51,7 @@ function panel(c, keys, i, prevSnap) {
         <div class="panel-meta">
           <a href="${c.base_url}" target="_blank" rel="noopener">${hostOf(c.base_url)}</a>
           ${s ? html`${sep}<span>${plural(s.branches_count, "салон", "салона", "салонов")}</span>` : ""}
+          ${dataDate(s) ? html`${sep}<span>данные на ${dataDate(s)}</span>` : ""}
           ${s ? html`${sep}<span>обновлено ${relSpan(s.fetched_at)}</span>` : ""}
         </div>
       </div>
@@ -61,8 +63,7 @@ function panel(c, keys, i, prevSnap) {
     </div>
     ${c.last_status === "error" && c.last_error ? html`<div class="error-banner">${icon("alert")}<div><b>Не удалось обновить данные.</b> ${c.last_error}</div></div>` : ""}
     ${s
-      ? html`${planRow(s.progress, { prev: prevSnap?.progress?.forecast_percent })}
-        <div class="tiles stagger">${keys.map((k, j) => tile(k, s.kpi[k], j, prevSnap?.kpi?.[k]?.current))}</div>`
+      ? summaryGrid(s, prevSnap)
       : html`<div class="empty inline">
           <p>Данных пока нет</p>
           ${running ? "" : html`<button class="btn btn-primary btn-sm" data-act="sync">${icon("refresh")} Обновить сейчас</button>`}</div>`}
@@ -82,7 +83,7 @@ function skeleton() {
     <div class="panels">${[0, 1].map(() => html`<div class="panel">
       <div class="skeleton" style="width:240px;height:38px;margin-bottom:18px"></div>
       <div class="skeleton" style="height:62px;margin-bottom:16px"></div>
-      <div class="tiles">${Array.from({ length: 10 }, () => html`<div class="skeleton" style="height:118px"></div>`)}</div></div>`)}</div>`;
+      <div class="summary">${Array.from({ length: 7 }, (_, i) => html`<div class="skeleton" style="height:118px;${i === 0 ? "grid-column:span 2" : ""}"></div>`)}</div></div>`)}</div>`;
 }
 
 export async function render(root) {
@@ -96,6 +97,13 @@ export async function render(root) {
     if (sort.key === "name") return c.name.toLowerCase();
     if (sort.key === "_exec") return c.snapshot?.progress?.execution_percent ?? null;
     if (sort.key === "_forecast") return c.snapshot?.progress?.forecast_percent ?? null;
+    const x = c.snapshot?.extras || {};
+    const ratio = (t) => (t && t.total ? t.done / t.total : null);
+    if (sort.key === "_activity") return x.activity ? x.activity.prev_hours ?? x.activity.hours : null;
+    if (sort.key === "_tasks_prev") return ratio(x.tasks_prev);
+    if (sort.key === "_tasks") return ratio(x.tasks);
+    if (sort.key === "_badges") return x.badges ? ratio({ done: x.badges.issued, total: x.badges.total }) : null;
+    if (sort.key === "_date") return c.snapshot?.source_updated_at ?? null;
     return c.snapshot?.kpi[sort.key]?.current ?? null;
   };
 
@@ -134,14 +142,19 @@ export async function render(root) {
     }
     const th = (key, label, num = true) => html`<th class="sortable ${num ? "num" : ""} ${sort.key === key ? `sorted ${sort.dir < 0 ? "desc" : ""}` : ""}" data-sort="${key}">${label}<span class="arrow">▲</span></th>`;
     return html`<div class="table-wrap"><table class="grid kpi-table">
-      <thead><tr>${th("name", "Клиент", false)}${th("_exec", "План продаж")}${th("_forecast", "Прогноз")}${data.key_metrics.map((k) => th(k, metricLabel(k)))}<th></th></tr></thead>
+      <thead><tr>${th("name", "Клиент", false)}${th("_exec", "План продаж")}${th("_forecast", "Прогноз")}${th("sales_amount", "Сумма заказов")}${th("vtl_orders_count", "Заказы ВТЛ")}${th("_activity", "Активность")}${th("_tasks_prev", "Задачи прошлой недели")}${th("_tasks", "Задачи этой недели")}${th("_badges", "Бейджи")}${th("_date", "Данные на")}<th></th></tr></thead>
       <tbody>${list.map((c, i) => html`<tr style="--i:${i}" data-id="${c.id}">
         <td><a class="client-cell" href="#/client/${c.id}">${avatar(c.name)}<span>
           <div class="name">${c.name}</div>
           <div class="sub"><span class="dot ${c.enabled ? c.last_status : "never"}"></span>${c.snapshot ? relSpan(c.snapshot.fetched_at) : "нет данных"}</div></span></a></td>
         <td class="num">${planCell(c.snapshot?.progress, "exec")}</td>
         <td class="num">${planCell(c.snapshot?.progress, "forecast")}</td>
-        ${data.key_metrics.map((k) => html`<td class="num">${cellKpi(k, c.snapshot?.kpi[k])}</td>`)}
+        ${["sales_amount", "vtl_orders_count"].map((k) => html`<td class="num">${cellKpi(k, c.snapshot?.kpi[k])}</td>`)}
+        <td class="num">${hoursCell(c.snapshot?.extras?.activity)}</td>
+        <td class="num">${ratioCell(c.snapshot?.extras?.tasks_prev, tasksStatus(c.snapshot?.extras?.tasks_prev))}</td>
+        <td class="num">${ratioCell(c.snapshot?.extras?.tasks)}</td>
+        <td class="num">${ratioCell(c.snapshot?.extras?.badges && { done: c.snapshot.extras.badges.issued, total: c.snapshot.extras.badges.total })}</td>
+        <td class="num cell-muted">${dataDate(c.snapshot) || "—"}</td>
         <td><div class="row-actions"><button class="icon-btn" data-act="sync" title="Обновить сейчас" aria-label="Обновить сейчас" ${c.last_status === "running" ? "disabled" : ""}>${icon("refresh", c.last_status === "running" ? "spin" : "")}</button></div></td>
       </tr>`)}</tbody></table></div>`;
   }
@@ -229,7 +242,7 @@ export async function render(root) {
         tmp.innerHTML = String(panel(c, data.key_metrics, 0, prevSnap[c.id]));
         const next = tmp.firstElementChild;
         if (prevSnap[c.id]?.fetched_at !== c.snapshot?.fetched_at) next.classList.add("flash");
-        next.querySelector(".tiles")?.classList.remove("stagger");
+        next.querySelector(".summary")?.classList.remove("stagger");
         el.replaceWith(next);
         animateCounters(next);
       }

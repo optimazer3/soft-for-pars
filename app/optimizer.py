@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -60,6 +60,7 @@ class CollectResult:
     progress: dict | None = None
     branches: list[dict] = field(default_factory=list)
     source_updated_at: str | None = None
+    extras: dict = field(default_factory=dict)  # activity, tasks, badges (whole company)
 
 
 class OptimizerClient:
@@ -165,11 +166,68 @@ class OptimizerClient:
             return None
         return data if isinstance(data, dict) else None
 
+    async def _optional(self, coro):
+        """Secondary data: a missing section or no access must not fail the collection."""
+        try:
+            return await coro
+        except ServerBusyError:
+            raise
+        except (OptimizerError, KeyError, TypeError, ValueError, IndexError):
+            return None
+
+    async def activity(self) -> dict | None:
+        """Hours in the system ("Мониторинг активности"): previous and current week, whole team."""
+        data = await self._get_json("/api/activity/weekly", params={"weeks": "2", "granularity": "week"})
+        weeks = data["period"]["weeks"]
+        totals = [0.0] * len(weeks)
+        for row in data.get("rows") or []:
+            for i, w in enumerate(row.get("weeks") or []):
+                if i < len(totals):
+                    totals[i] += float(w.get("minutes") or 0)
+        return {
+            "prev_week_start": weeks[0] if len(weeks) > 1 else None,
+            "prev_hours": round(totals[0] / 60, 1) if len(weeks) > 1 else None,
+            "week_start": weeks[-1],
+            "hours": round(totals[-1] / 60, 1),
+        }
+
+    async def tasks_week(self, week_start: str | None = None) -> dict:
+        """Tasks of a week ("Задачи"): completed / total."""
+        data = await self._get_json("/api/tasks/weekly", params={"week_start": week_start} if week_start else None)
+        p = data.get("progress") or {}
+        return {
+            "week_start": data.get("week_start"),
+            "label": data.get("week_label"),
+            "done": int(p.get("completed_tasks") or 0),
+            "total": int(p.get("total_tasks") or 0),
+        }
+
+    async def badges(self) -> dict:
+        """Audio badges ("Аудиобейджи"): handed out now / all active badges."""
+        all_badges = await self._get_json("/api/badges")
+        current = await self._get_json("/api/badge-assignments", params={"current_only": "true"})
+        active = {b["id"] for b in all_badges.get("badges") or [] if b.get("is_active", True)}
+        issued = {a["badge_id"] for a in current.get("assignments") or [] if not a.get("return_date")}
+        return {"issued": len(issued & active), "total": len(active)}
+
+    async def extras(self) -> dict:
+        tasks = await self._optional(self.tasks_week())
+        prev_tasks = None
+        if tasks and tasks.get("week_start"):
+            prev_start = (date.fromisoformat(tasks["week_start"]) - timedelta(days=7)).isoformat()
+            prev_tasks = await self._optional(self.tasks_week(prev_start))
+        return {
+            "activity": await self._optional(self.activity()),
+            "tasks": tasks,
+            "tasks_prev": prev_tasks,
+            "badges": await self._optional(self.badges()),
+        }
+
     async def collect(self, period: str | None = None) -> CollectResult:
         """Log in and fetch the dashboard: totals + every branch.
 
         Requests are made one after another (the throttle serialises them per site anyway),
-        so a client with N branches costs 5 + 2N requests.
+        so a client with N branches costs 10 + 2N requests.
         """
         await self.login()
         period = period or await self.default_period()
@@ -190,7 +248,7 @@ class OptimizerClient:
 
         updated = total.pop("last_update_date", None)
         return CollectResult(period=period, kpi=total, progress=progress, branches=rows,
-                             source_updated_at=updated)
+                             source_updated_at=updated, extras=await self.extras())
 
 
 def _retry_after(resp: httpx.Response) -> float | None:

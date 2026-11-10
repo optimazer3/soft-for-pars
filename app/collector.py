@@ -137,7 +137,7 @@ class Collector:
                 client = self._client(row["base_url"], row["login"], row["password"])
                 res = await client.collect()
                 await adb(db.save_snapshot, client_id, res.period, res.source_updated_at,
-                          res.kpi, res.branches, res.progress)
+                          res.kpi, res.branches, res.progress, res.extras)
                 await adb(db.execute,
                           "UPDATE app.clients SET last_status = 'ok', last_error = NULL, last_sync_at = %s WHERE id = %s",
                           (db.now(), client_id))

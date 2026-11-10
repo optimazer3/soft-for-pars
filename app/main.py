@@ -26,12 +26,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logging.getLogger("httpx").setLevel(logging.WARNING)
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
-# Metrics shown on the dashboard overview (same as the Optimizer home page cards).
-KEY_METRICS = [
-    "lost_count", "loading_percentage", "selection_to_prescription", "prescription_to_order",
-    "lost_percentage", "foreign_orders_percentage", "own_orders_avg_check",
-    "foreign_orders_avg_check", "sales_amount", "average_check",
-]
+# KPI metrics shown on the dashboard (the rest of the summary comes from progress/extras).
+KEY_METRICS = ["sales_amount", "vtl_orders_count"]
 
 
 @contextlib.asynccontextmanager
@@ -315,7 +311,7 @@ def dashboard():
         r["client_id"]: r for r in db.query(
             """
             SELECT DISTINCT ON (s.client_id)
-                   s.client_id, s.period, s.fetched_at, s.source_updated_at, s.progress,
+                   s.client_id, s.period, s.fetched_at, s.source_updated_at, s.progress, s.extras,
                    jsonb_array_length(s.branches) AS branches_count,
                    (SELECT coalesce(jsonb_object_agg(k, s.kpi -> k), '{}'::jsonb)
                       FROM unnest(%s::text[]) AS k WHERE s.kpi ? k) AS kpi
@@ -332,7 +328,7 @@ def dashboard():
         item["snapshot"] = {
             "period": s["period"], "fetched_at": s["fetched_at"],
             "source_updated_at": s["source_updated_at"], "branches_count": s["branches_count"],
-            "kpi": s["kpi"], "progress": s["progress"],
+            "kpi": s["kpi"], "progress": s["progress"], "extras": s["extras"] or {},
         } if s else None
         out.append(item)
     s = db.get_settings()
