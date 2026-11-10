@@ -14,6 +14,8 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--no-browser", action="store_true", help="не открывать браузер")
+    parser.add_argument("--behind-proxy", action="store_true",
+                        help="сервер: работать за Caddy/nginx (HTTPS и IP посетителя из заголовков прокси)")
     parser.add_argument("--reset-login", action="store_true",
                         help="сбросить логин и пароль входа к исходным и выйти")
     parser.add_argument("--import-sqlite", nargs="?", const="data/optimizer.db", default=None,
@@ -52,7 +54,8 @@ def main() -> None:
     if not args.no_browser:
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
     print(f"\n  Optimizer Dashboard запущен: {url}\n  Остановить: Ctrl+C\n")
-    uvicorn.run("app.main:app", host=args.host, port=args.port, log_level="warning")
+    proxy = {"proxy_headers": True, "forwarded_allow_ips": "127.0.0.1"} if args.behind_proxy else {}
+    uvicorn.run("app.main:app", host=args.host, port=args.port, log_level="warning", **proxy)
 
 
 if __name__ == "__main__":

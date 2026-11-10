@@ -40,6 +40,18 @@ start.bat --import-sqlite
 
 Параметры: `start.bat --port 8080` — другой порт, `--no-browser` — не открывать браузер.
 
+## Установка на сервер
+
+Ubuntu 22.04/24.04, домен направлен A-записью на IP сервера. Код в `/opt/svodka`, файл `.env` рядом, затем:
+
+```
+sudo bash deploy/install.sh ваш-домен.ru
+```
+
+Скрипт ставит Python-окружение, Caddy (HTTPS от Let's Encrypt), автозапуск через systemd (`svodka.service`),
+часовой пояс Москвы и брандмауэр (открыты 22, 80, 443). Обновление: `sudo bash deploy/update.sh`.
+Логи: `journalctl -u svodka -f`. Перезапуск: `sudo systemctl restart svodka`.
+
 ## Вход
 
 Сайт закрыт паролем. Пользователи хранятся в таблице `app.users` (логин и пароль открытым текстом) —
