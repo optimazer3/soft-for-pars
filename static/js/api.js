@@ -26,11 +26,26 @@ async function request(method, url, body) {
   return data;
 }
 
+const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "")).toString();
+
+export const admin = {
+  overview: () => request("GET", "/api/admin/overview"),
+  users: () => request("GET", "/api/admin/users"),
+  createUser: (body) => request("POST", "/api/admin/users", body),
+  updateUser: (id, body) => request("PUT", `/api/admin/users/${id}`, body),
+  setPassword: (id, body) => request("POST", `/api/admin/users/${id}/password`, body),
+  logoutUser: (id) => request("POST", `/api/admin/users/${id}/logout`),
+  deleteUser: (id) => request("DELETE", `/api/admin/users/${id}`),
+  generatePassword: () => request("GET", "/api/admin/generate-password"),
+  events: (params = {}) => request("GET", `/api/admin/events?${qs(params)}`),
+  sessions: (params = {}) => request("GET", `/api/admin/sessions?${qs(params)}`),
+  endSession: (sid) => request("POST", `/api/admin/sessions/${encodeURIComponent(sid)}/end`),
+};
+
 export const api = {
   me: () => request("GET", "/api/auth/me"),
   login: (body) => request("POST", "/api/auth/login", body),
   logout: () => request("POST", "/api/auth/logout"),
-  changeCredentials: (body) => request("PUT", "/api/auth/credentials", body),
   dashboard: () => request("GET", "/api/dashboard"),
   clients: () => request("GET", "/api/clients"),
   client: (id) => request("GET", `/api/clients/${id}`),

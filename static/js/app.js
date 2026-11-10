@@ -6,6 +6,7 @@ import * as clients from "./views/clients.js";
 import * as clientForm from "./views/client-form.js";
 import * as clientDetail from "./views/client-detail.js";
 import * as settings from "./views/settings.js";
+import * as adminPage from "./views/admin.js";
 import { showLogin } from "./views/login.js";
 
 const ROUTES = [
@@ -15,6 +16,7 @@ const ROUTES = [
   [/^#\/clients\/(\d+)\/edit$/, clientForm, "clients"],
   [/^#\/client\/(\d+)$/, clientDetail, "dashboard"],
   [/^#\/settings$/, settings, "settings"],
+  [/^#\/admin(?:\/(users|log|sessions))?$/, adminPage, "admin"],
 ];
 
 const view = document.getElementById("view");
@@ -181,8 +183,17 @@ async function checkBackgroundSync() {
 
 // ---------- sign-in ----------
 let started = false;
+let me = null;
 
-function start() {
+function applyRole(user) {
+  me = user;
+  document.getElementById("admin-tab").hidden = me?.role !== "admin";
+  document.getElementById("logout").title = me ? `Выйти (${me.login})` : "Выйти";
+  moveIndicator(indicator, tabs.querySelector(".tab.active"));
+}
+
+async function start(user) {
+  try { applyRole(user?.login ? user : await api.me()); } catch { /* handled by auth:required */ }
   document.body.classList.remove("auth-pending", "auth-locked");
   if (!started) {
     started = true;
@@ -196,6 +207,7 @@ function start() {
 
 function requireLogin() {
   renderSeq++;
+  applyRole(null);
   runCleanup();
   view.innerHTML = "";
   showLogin(start);
@@ -207,6 +219,8 @@ document.getElementById("logout").addEventListener("click", async () => {
   try { await api.logout(); } catch { /* ignore */ }
   requireLogin();
 });
+
+window.addEventListener("auth:changed", () => api.me().then(applyRole).catch(() => {}));
 
 api.me().then(start).catch((e) => {
   if (e.status === 401) { requireLogin(); return; }

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hmac
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +32,8 @@ KEY_METRICS = ["sales_amount", "vtl_orders_count"]
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
     db.init()
+    auth.ensure_accounts()
+    db.prune_logs()
     db.execute("UPDATE app.clients SET last_status = 'error', last_error = 'Сбор прерван' "
                "WHERE last_status = 'running'")
     db.prune_snapshots(int(db.get_settings().get("snapshot_retention_days") or 7))
@@ -48,13 +49,30 @@ app = FastAPI(title="Optimizer Dashboard", lifespan=lifespan, docs_url=None, red
 PUBLIC_API = {"/api/auth/login", "/api/auth/me"}
 
 
+def client_ip(request: Request) -> str:
+    return request.client.host if request.client else "?"
+
+
+def audit(request: Request, action: str, target: str | None = None, details: dict | None = None) -> None:
+    """Write an action of the signed-in user to the log (blocking call: use from sync code/threads)."""
+    user = getattr(request.state, "user", None) or {}
+    auth.log_event(user.get("login"), action, target, ip=client_ip(request),
+                   ua=request.headers.get("user-agent"), details=details)
+
+
 @app.middleware("http")
 async def require_login(request: Request, call_next):
-    """Every /api/* call needs a valid session cookie (except login itself)."""
+    """Every /api/* call needs a valid session (except login itself); /api/admin/* needs an admin."""
     path = request.url.path
+    request.state.user = None
     if path.startswith("/api/") and path not in PUBLIC_API:
-        if not await asyncio.to_thread(auth.read_session, request.cookies.get(auth.COOKIE_NAME)):
+        user = await asyncio.to_thread(auth.parse_session, request.cookies.get(auth.COOKIE_NAME))
+        if not user:
             return JSONResponse({"detail": "Требуется вход"}, status_code=401)
+        if path.startswith("/api/admin/") and user["role"] != "admin":
+            return JSONResponse({"detail": "Раздел доступен только администратору"}, status_code=403)
+        request.state.user = user
+        await asyncio.to_thread(auth.touch, user["sid"])
     return await call_next(request)
 
 
@@ -73,43 +91,46 @@ class LoginIn(BaseModel):
     remember: bool = True
 
 
-class CredentialsIn(BaseModel):
-    current_password: str
-    new_login: str = Field(min_length=3, max_length=50)
-    new_password: str = Field(min_length=8, max_length=200)
-
-
-def _send_cookie(request: Request, response: Response, value: str, remember: bool) -> None:
+def send_cookie(request: Request, response: Response, value: str, remember: bool) -> None:
     response.set_cookie(
         auth.COOKIE_NAME, value, max_age=auth.COOKIE_MAX_AGE if remember else None, httponly=True,
         samesite="lax", secure=request.url.scheme == "https", path="/",
     )
 
 
-def _set_session_cookie(request: Request, response: Response, login: str, remember: bool) -> None:
-    _send_cookie(request, response, auth.make_session(login, remember), remember)
-
-
 @app.post("/api/auth/login")
 async def login(body: LoginIn, request: Request, response: Response):
-    ip = request.client.host if request.client else "?"
+    ip = client_ip(request)
+    ua = request.headers.get("user-agent")
     locked = auth.lock_remaining(ip)
     if locked:
         raise HTTPException(429, f"Слишком много неудачных попыток. Попробуйте через {locked} с")
-    login_name = await asyncio.to_thread(auth.check_credentials, body.login, body.password)
-    if not login_name:
+    user = await asyncio.to_thread(auth.check_credentials, body.login, body.password)
+    if not user:
         await asyncio.sleep(0.6)  # slows down guessing
         lock = auth.register_failure(ip)
+        await asyncio.to_thread(auth.log_event, None, "login_failed", body.login.strip()[:100] or None,
+                                ip=ip, ua=ua, details={"locked_for": lock} if lock else None)
         if lock:
             raise HTTPException(429, f"Слишком много неудачных попыток. Вход заблокирован на {lock} с")
         raise HTTPException(401, "Неверный логин или пароль")
     auth.register_success(ip)
-    await asyncio.to_thread(_set_session_cookie, request, response, login_name, body.remember)
-    return {"login": login_name}
+
+    def _start() -> str:
+        cookie = auth.start_session(user, body.remember, ip, ua)
+        db.execute("UPDATE app.users SET last_login_at = now() WHERE id = %s", (user["id"],))
+        auth.log_event(user["login"], "login", None, ip=ip, ua=ua)
+        return cookie
+
+    send_cookie(request, response, await asyncio.to_thread(_start), body.remember)
+    return {"login": user["login"], "role": user["role"]}
 
 
 @app.post("/api/auth/logout")
-def logout(response: Response):
+def logout(request: Request, response: Response):
+    user = request.state.user
+    auth.end_session(user["sid"], "logout")
+    audit(request, "logout")
     response.delete_cookie(auth.COOKIE_NAME, path="/")
     return {"ok": True}
 
@@ -117,31 +138,13 @@ def logout(response: Response):
 @app.get("/api/auth/me")
 def me(request: Request, response: Response):
     cookie = request.cookies.get(auth.COOKIE_NAME)
-    parsed = auth.parse_session(cookie)
-    if not parsed:
+    user = auth.parse_session(cookie)
+    if not user:
         raise HTTPException(401, "Требуется вход")
-    login_name, remember = parsed
-    if remember:  # renew the cookie on every visit, so "remember me" never runs out
-        _send_cookie(request, response, cookie, True)
-    return {"login": login_name}
-
-
-@app.put("/api/auth/credentials")
-async def change_credentials(body: CredentialsIn, request: Request, response: Response):
-    parsed = await asyncio.to_thread(auth.parse_session, request.cookies.get(auth.COOKIE_NAME))
-    login_name, remember = parsed or ("", False)
-    stored = await asyncio.to_thread(auth.current_password, login_name)
-    if stored is None or not hmac.compare_digest(body.current_password.encode(), stored.encode()):
-        await asyncio.sleep(0.6)
-        raise HTTPException(400, "Текущий пароль указан неверно")
-    try:
-        await asyncio.to_thread(auth.change_credentials, login_name, body.new_login, body.new_password)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from None
-    new_login = body.new_login.strip()
-    # A new cookie for this browser; every other session of the user ends.
-    await asyncio.to_thread(_set_session_cookie, request, response, new_login, remember)
-    return {"login": new_login}
+    auth.touch(user["sid"])
+    if user["remember"]:  # renew the cookie on every visit, so "remember me" never runs out
+        send_cookie(request, response, cookie, True)
+    return {"login": user["login"], "role": user["role"], "sid": user["sid"]}
 
 
 # ---------- models ----------
@@ -229,7 +232,7 @@ def get_client(client_id: int):
 
 
 @app.post("/api/clients", status_code=201)
-def create_client(body: ClientIn):
+def create_client(body: ClientIn, request: Request):
     if not body.password:
         raise HTTPException(422, "Укажите пароль")
     row = db.query_one(
@@ -237,25 +240,32 @@ def create_client(body: ClientIn):
         "VALUES(%s, %s, %s, %s, %s, %s) RETURNING id",
         (body.name, body.base_url, body.login, body.password, body.enabled, body.notes),
     )
+    audit(request, "client_created", body.name)
     return get_client_or_404(row["id"])
 
 
 @app.put("/api/clients/{client_id}")
-def update_client(client_id: int, body: ClientIn):
-    get_client_or_404(client_id)
+def update_client(client_id: int, body: ClientIn, request: Request):
+    before = get_client_or_404(client_id)
     fields = {"name": body.name, "base_url": body.base_url, "login": body.login,
               "enabled": body.enabled, "notes": body.notes, "updated_at": db.now()}
     if body.password:
         fields["password"] = body.password
     sets = ", ".join(f"{k} = %({k})s" for k in fields)
     db.execute(f"UPDATE app.clients SET {sets} WHERE id = %(id)s", {**fields, "id": client_id})
+    changed = [k for k in ("name", "base_url", "login", "enabled", "notes") if before.get(k) != fields[k]]
+    if body.password:
+        changed.append("password")
+    if changed:
+        audit(request, "client_updated", body.name, {"fields": changed})
     return get_client_or_404(client_id)
 
 
 @app.delete("/api/clients/{client_id}", status_code=204)
-def delete_client(client_id: int):
-    get_client_or_404(client_id)
+def delete_client(client_id: int, request: Request):
+    c = get_client_or_404(client_id)
     db.execute("DELETE FROM app.clients WHERE id = %s", (client_id,))
+    audit(request, "client_deleted", c["name"])
 
 
 @app.post("/api/clients/test")
@@ -289,8 +299,9 @@ async def sync_client(client_id: int):
 
 
 @app.post("/api/sync", status_code=202)
-async def sync_all():
+async def sync_all(request: Request):
     if not collector.state.running:
+        await asyncio.to_thread(audit, request, "sync_all")
         asyncio.create_task(collector.sync_all(trigger="manual"))
         await asyncio.sleep(0)
     return collector.status()
@@ -361,10 +372,11 @@ def get_settings():
 
 
 @app.put("/api/settings")
-def put_settings(body: SettingsIn):
+def put_settings(body: SettingsIn, request: Request):
     # last_scheduled_run = now: slots that already passed today are not treated as "missed".
     db.set_settings({**body.model_dump(), "last_scheduled_run": db.now_iso()})
     db.prune_snapshots(body.snapshot_retention_days)
+    audit(request, "settings_changed")
     return get_settings()
 
 
@@ -381,6 +393,10 @@ class AppStatic(StaticFiles):
             response.headers["Cache-Control"] = "no-cache"
         return response
 
+
+from .admin import router as admin_router  # noqa: E402
+
+app.include_router(admin_router)
 
 app.mount("/static", AppStatic(directory=STATIC_DIR), name="static")
 

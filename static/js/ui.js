@@ -50,6 +50,13 @@ const P = {
   plug: '<path d="M12 22v-5M9 8V2M15 8V2M18 8v5a6 6 0 0 1-12 0V8Z"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   store: '<path d="M3 9 4.5 4h15L21 9M3 9v11h18V9M3 9h18M9 20v-6h6v6"/>',
+  shield: '<path d="M12 3 4 6v6c0 4.4 3.4 8.5 8 9 4.6-.5 8-4.6 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-4"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.3-9.3M17 6l3 3M14.5 8.5l2 2"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+  dice: '<rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor"/><circle cx="15.5" cy="8.5" r="1.2" fill="currentColor"/><circle cx="8.5" cy="15.5" r="1.2" fill="currentColor"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
 };
 export const icon = (name, cls = "") => raw(`<svg class="${cls}" viewBox="0 0 24 24">${P[name] || ""}</svg>`);
@@ -216,6 +223,78 @@ export function confirmModal({ title, text, confirmText = "Подтвердит�
       if (act) done(act === "yes");
     });
   });
+}
+
+/**
+ * Modal with a form. `body` is html; `onSubmit(form)` returns a promise — on error the
+ * modal stays open and shows the message; on success it closes and resolves with the result.
+ */
+export function formModal({ title, text = "", body, submitText = "Сохранить", danger = false, onSubmit, onOpen }) {
+  return new Promise((resolve) => {
+    const root = document.getElementById("modal-root");
+    const bd = document.createElement("div");
+    bd.className = "modal-backdrop";
+    bd.innerHTML = String(html`<form class="modal" role="dialog" aria-modal="true" novalidate autocomplete="off">
+      <h3>${title}</h3>${text ? html`<p>${text}</p>` : ""}
+      <div class="modal-body">${body}</div>
+      <div class="modal-error" role="alert"></div>
+      <div class="actions">
+        <button type="button" class="btn btn-ghost" data-act="no">Отмена</button>
+        <button type="submit" class="btn ${danger ? "btn-danger" : "btn-primary"}" data-act="yes">${submitText}</button>
+      </div></form>`);
+    root.appendChild(bd);
+    const form = bd.querySelector("form");
+    const err = bd.querySelector(".modal-error");
+    const submit = bd.querySelector('[data-act="yes"]');
+    onOpen?.(form);
+    setTimeout(() => (form.querySelector("input:not([type=hidden]):not([disabled])") || submit).focus(), 60);
+    const close = (v) => {
+      document.removeEventListener("keydown", onKey);
+      bd.classList.add("out");
+      setTimeout(() => bd.remove(), 200);
+      resolve(v);
+    };
+    const onKey = (e) => { if (e.key === "Escape") close(null); };
+    document.addEventListener("keydown", onKey);
+    bd.addEventListener("mousedown", (e) => { if (e.target === bd) close(null); });
+    bd.querySelector('[data-act="no"]').addEventListener("click", () => close(null));
+    form.addEventListener("input", () => err.classList.remove("show"));
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (submit.disabled) return;
+      submit.disabled = true;
+      try {
+        close(await onSubmit(form) ?? true);
+      } catch (ex) {
+        err.textContent = ex.message;
+        err.classList.add("show");
+        form.classList.remove("shake"); void form.offsetWidth; form.classList.add("shake");
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  });
+}
+
+/** "Mozilla/5.0 (Windows NT 10.0…) Chrome/…" -> "Chrome · Windows". */
+export function shortUA(ua) {
+  if (!ua) return "—";
+  const browser = /YaBrowser/.test(ua) ? "Яндекс Браузер" : /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera"
+    : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari"
+    : /curl|python|httpx/i.test(ua) ? "Программа" : "Браузер";
+  const os = /iPhone|iPad/.test(ua) ? "iOS" : /Android/.test(ua) ? "Android" : /Windows/.test(ua) ? "Windows"
+    : /Mac OS X/.test(ua) ? "macOS" : /Linux/.test(ua) ? "Linux" : "";
+  return os ? `${browser} · ${os}` : browser;
+}
+
+/** "1 ч 25 мин" between two timestamps. */
+export function duration(fromIso, toIso) {
+  const m = Math.max(0, Math.round((new Date(toIso) - new Date(fromIso)) / 60000));
+  if (m < 1) return "меньше минуты";
+  if (m < 60) return `${m} мин`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return m % 60 ? `${h} ч ${m % 60} мин` : `${h} ч`;
+  return `${Math.round(h / 24)} дн`;
 }
 
 /** Put a button into a loading state while the promise runs. */

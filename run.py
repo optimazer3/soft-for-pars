@@ -17,7 +17,7 @@ def main() -> None:
     parser.add_argument("--behind-proxy", action="store_true",
                         help="сервер: работать за Caddy/nginx (HTTPS и IP посетителя из заголовков прокси)")
     parser.add_argument("--reset-login", action="store_true",
-                        help="сбросить логин и пароль входа к исходным и выйти")
+                        help="восстановить вход администратора (admin / admin123) и выйти")
     parser.add_argument("--import-sqlite", nargs="?", const="data/optimizer.db", default=None,
                         metavar="PATH", help="перенести данные из старой SQLite-базы и выйти")
     args = parser.parse_args()
@@ -42,10 +42,11 @@ def main() -> None:
             import_sqlite(args.import_sqlite)
             return
         if args.reset_login:
-            db.execute("DELETE FROM app.users")
-            db.delete_settings(["auth_login", "auth_hash", "auth_version"])
-            print("Пользователи удалены: вход снова по логину admin и исходному мастер-паролю. "
-                  "Все сессии завершены.")
+            from app import auth
+            auth.ensure_accounts()
+            auth.reset_admin()
+            print("Администратор восстановлен: логин admin, пароль admin123. "
+                  "Смените пароль в админ-панели после входа.")
             return
     finally:
         db.close()  # the server opens its own connections

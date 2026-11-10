@@ -3,7 +3,7 @@ import { api } from "../api.js";
 import { fmtTime, html, icon, mount, plural, toast, withBusy } from "../ui.js";
 
 export async function render(root) {
-  const [s, me] = await Promise.all([api.settings(), api.me()]);
+  const s = await api.settings();
   let times = [...s.schedule_times];
 
   mount(root, html`
@@ -30,6 +30,17 @@ export async function render(root) {
         </div>
 
         <div class="card">
+          <h3 class="card-title">История</h3>
+          <div class="setting-row block">
+            <div class="range-head"><span class="t">Хранить данные прошлых дней</span><b id="ret-v"></b></div>
+            <div class="d">Более старые данные удаляются автоматически, последние показатели клиента сохраняются всегда</div>
+            <input type="range" class="range" id="ret" min="1" max="30" value="${s.snapshot_retention_days}" aria-label="Срок хранения">
+          </div>
+        </div>
+        <div><button class="btn btn-primary" id="save" type="button">${icon("check")} Сохранить настройки</button></div>
+      </div>
+      <div class="side-col">
+        <div class="card">
           <h3 class="card-title">Бережный режим</h3>
           <div class="setting-row block">
             <div class="range-head"><span class="t">Одновременных запросов</span><b id="conc-v"></b></div>
@@ -47,26 +58,8 @@ export async function render(root) {
           </div>
         </div>
 
-        <div class="card">
-          <h3 class="card-title">История</h3>
-          <div class="setting-row block">
-            <div class="range-head"><span class="t">Хранить данные прошлых дней</span><b id="ret-v"></b></div>
-            <div class="d">Более старые данные удаляются автоматически, последние показатели клиента сохраняются всегда</div>
-            <input type="range" class="range" id="ret" min="1" max="30" value="${s.snapshot_retention_days}" aria-label="Срок хранения">
-          </div>
-          <div class="card-actions"><button class="btn btn-primary" id="save" type="button">${icon("check")} Сохранить настройки</button></div>
-        </div>
       </div>
 
-      <form class="card" id="acc-form" autocomplete="off" novalidate>
-        <h3>Вход</h3>
-        <p class="hint">Логин и пароль для входа на этот сайт</p>
-        <div class="field"><input id="acc-login" placeholder=" " value="${me.login}" autocomplete="username" spellcheck="false"><label for="acc-login">Логин</label></div>
-        <div class="field"><input id="acc-new" type="password" placeholder=" " autocomplete="new-password"><label for="acc-new">Новый пароль</label>
-          <div class="help">Не короче 8 символов</div></div>
-        <div class="field"><input id="acc-cur" type="password" placeholder=" " autocomplete="current-password"><label for="acc-cur">Текущий пароль</label></div>
-        <button class="btn" id="acc-save" type="submit">${icon("check")} Изменить</button>
-      </form>
     </div>`);
 
   const $ = (q) => root.querySelector(q);
@@ -113,39 +106,6 @@ export async function render(root) {
   };
   ["#conc", "#int", "#cd", "#ret"].forEach((q) => $(q).addEventListener("input", drawRanges));
   drawRanges();
-
-  $("#acc-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const body = {
-      new_login: $("#acc-login").value.trim(),
-      new_password: $("#acc-new").value,
-      current_password: $("#acc-cur").value,
-    };
-    const bad = body.new_login.length < 3 ? ["#acc-login", "Логин — не короче 3 символов"]
-      : body.new_password.length < 8 ? ["#acc-new", "Новый пароль — не короче 8 символов"]
-      : !body.current_password ? ["#acc-cur", "Введите текущий пароль"] : null;
-    if (bad) {
-      const field = $(bad[0]).closest(".field");
-      field.classList.remove("invalid");
-      void field.offsetWidth;
-      field.classList.add("invalid");
-      $(bad[0]).focus();
-      toast("error", bad[1]);
-      return;
-    }
-    await withBusy($("#acc-save"), async () => {
-      try {
-        await api.changeCredentials(body);
-        $("#acc-new").value = "";
-        $("#acc-cur").value = "";
-        localStorage.setItem("lastLogin", body.new_login);
-        toast("success", "Данные для входа изменены");
-      } catch (err) {
-        toast("error", "Не удалось изменить", err.message);
-      }
-    });
-  });
-  $("#acc-form").addEventListener("input", (e) => e.target.closest(".field")?.classList.remove("invalid"));
 
   $("#save").addEventListener("click", (e) => withBusy(e.currentTarget, async () => {
     try {
