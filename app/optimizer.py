@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from datetime import datetime
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -132,10 +133,13 @@ class OptimizerClient:
 
     async def default_period(self) -> str:
         data = await self._get_json("/api/default-period")
-        return data.get("period")
+        period = data.get("period") if isinstance(data, dict) else None
+        return period or datetime.now().strftime("%Y-%m")
 
     async def branches(self) -> list[dict]:
         data = await self._get_json("/api/branches")
+        if not isinstance(data, list):
+            raise OptimizerError("Сайт вернул список салонов в неожиданном виде")
         return [
             {"id": b.get("id"), "name": b.get("name") or b.get("id"), "is_active": b.get("is_active", True)}
             for b in data if isinstance(b, dict) and b.get("id")
@@ -146,7 +150,10 @@ class OptimizerClient:
         return [("period", period), *(("branch_guids", b) for b in branch_ids or [])]
 
     async def kpi(self, period: str, branch_ids: list[str] | None = None) -> dict:
-        return await self._get_json("/api/kpi", params=self._params(period, branch_ids))
+        data = await self._get_json("/api/kpi", params=self._params(period, branch_ids))
+        if not isinstance(data, dict):
+            raise OptimizerError("Сайт вернул показатели в неожиданном виде")
+        return data
 
     async def monthly_progress(self, period: str, branch_ids: list[str] | None = None) -> dict | None:
         """Sales plan progress. Optional: an error here must not fail the whole collection."""

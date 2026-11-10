@@ -9,7 +9,7 @@ async function request(method, url, body) {
   try {
     resp = await fetch(url, opts);
   } catch {
-    throw new Error("Нет связи с локальным сервером. Он запущен?");
+    throw new Error("Нет связи с сервером. Проверьте подключение и попробуйте ещё раз.");
   }
   if (resp.status === 204) return null;
   const data = await resp.json().catch(() => null);

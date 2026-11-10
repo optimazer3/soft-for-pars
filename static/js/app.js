@@ -1,6 +1,6 @@
-// App shell: hash router, tab indicator, global "sync all" button.
+// App shell: hash router, tab indicator, global "refresh all" button, sign-in.
 import { api } from "./api.js";
-import { fmtTime, moveIndicator, toast } from "./ui.js";
+import { fmtTime, moveIndicator, plural, toast } from "./ui.js";
 import * as dashboard from "./views/dashboard.js";
 import * as clients from "./views/clients.js";
 import * as clientForm from "./views/client-form.js";
@@ -20,6 +20,7 @@ const ROUTES = [
 const view = document.getElementById("view");
 const tabs = document.getElementById("tabs");
 const indicator = document.getElementById("tabs-indicator");
+const locked = () => document.body.classList.contains("auth-locked");
 let cleanup = null;
 let renderSeq = 0;
 
@@ -28,29 +29,35 @@ function setActiveTab(name) {
   tabs.querySelectorAll(".tab").forEach((t) => {
     const on = t.dataset.tab === name;
     t.classList.toggle("active", on);
-    if (on) active = t;
+    if (on) { active = t; t.setAttribute("aria-current", "page"); } else t.removeAttribute("aria-current");
   });
   moveIndicator(indicator, active);
 }
 
+function runCleanup() {
+  if (!cleanup) return;
+  try { cleanup(); } catch { /* ignore */ }
+  cleanup = null;
+}
+
 async function route() {
-  if (document.body.classList.contains("auth-locked")) return;
+  if (locked()) return;
   const hash = location.hash || "#/dashboard";
   let match = null;
   for (const [re, mod, tab] of ROUTES) {
     const m = re.exec(hash);
-    if (m) { match = { mod, tab, params: m.slice(1) }; break; }
+    if (m) { match = { mod, tab, params: m.slice(1).filter((x) => x !== undefined) }; break; }
   }
-  if (!match) { location.hash = "#/dashboard"; return; }
+  if (!match) { location.replace("#/dashboard"); return; }
 
   const seq = ++renderSeq;
   setActiveTab(match.tab);
-  if (cleanup) { try { cleanup(); } catch { /* ignore */ } cleanup = null; }
+  runCleanup();
 
   if (view.childElementCount) {
     view.classList.remove("entering");
     view.classList.add("leaving");
-    await new Promise((r) => setTimeout(r, 140));
+    await new Promise((r) => setTimeout(r, 110));
     if (seq !== renderSeq) return;
   }
   view.classList.remove("leaving");
@@ -59,38 +66,55 @@ async function route() {
   view.classList.add("entering");
   window.scrollTo({ top: 0 });
   try {
-    cleanup = (await match.mod.render(view, match.params)) || null;
+    const dispose = (await match.mod.render(view, match.params)) || null;
+    if (seq !== renderSeq) { dispose?.(); return; } // the user already went elsewhere
+    cleanup = dispose;
   } catch (e) {
+    if (seq !== renderSeq || e.status === 401) return; // 401 -> the login screen takes over
     console.error(e);
-    toast("error", "Не удалось открыть страницу", e.message);
+    view.innerHTML = "";
+    if (e.status === 404) {
+      toast("error", "Страница не найдена", e.message);
+      location.replace("#/dashboard");
+    } else {
+      toast("error", "Не удалось открыть страницу", e.message);
+    }
   }
 }
 
 window.addEventListener("hashchange", route);
 window.addEventListener("resize", () => moveIndicator(indicator, tabs.querySelector(".tab.active")));
+document.fonts?.ready.then(() => moveIndicator(indicator, tabs.querySelector(".tab.active")));
 
-// ---------- global sync ----------
+// ---------- refresh all ----------
 const syncBtn = document.getElementById("sync-all");
 const syncLabel = syncBtn.querySelector(".sync-label");
 const syncBar = syncBtn.querySelector(".sync-progress");
 let polling = false;
-let lastDone = -1;
 
 function showSync(st) {
   syncBtn.classList.toggle("spinning", st.running);
   syncBtn.disabled = st.running;
-  if (st.running) {
-    syncLabel.textContent = `Собираю ${st.done}/${st.total}`;
-    syncBar.style.width = st.total ? `${(st.done / st.total) * 100}%` : "0";
+  syncLabel.textContent = st.running ? `Обновляю ${st.done} из ${st.total}` : "Обновить всех";
+  syncBar.style.width = st.running && st.total ? `${(st.done / st.total) * 100}%` : "0";
+}
+
+function summaryToast(st) {
+  const ok = st.done - st.failed - st.skipped;
+  if (st.failed) {
+    const text = [ok ? `Обновлено: ${ok}` : "", `с ошибкой: ${st.failed}`].filter(Boolean).join(", ");
+    toast("error", "Обновление завершено с ошибками", st.note ? `${text}. ${st.note}` : text);
+  } else if (!ok) {
+    toast("info", "Данные уже свежие", "Все клиенты обновлялись недавно");
   } else {
-    syncLabel.textContent = "Обновить всех";
-    syncBar.style.width = "0";
+    toast("success", "Данные обновлены", plural(ok, "клиент", "клиента", "клиентов"));
   }
 }
 
-export async function pollSync() {
+async function pollSync(announce = false) {
   if (polling) return;
   polling = true;
+  let lastDone = -1;
   try {
     for (;;) {
       const st = await api.syncStatus();
@@ -101,71 +125,61 @@ export async function pollSync() {
       }
       if (!st.running) {
         window.dispatchEvent(new CustomEvent("sync:done", { detail: st }));
-        if (st.total && st.trigger === "manual") {
-          const ok = st.done - st.failed - st.skipped;
-          const parts = [`Обновлено: ${ok}`];
-          if (st.skipped) parts.push(`уже свежие: ${st.skipped}`);
-          if (st.failed) parts.push(`с ошибкой: ${st.failed}`);
-          parts.push(`запросов к сайтам: ${st.requests}`);
-          const text = parts.join(" · ") + (st.note ? `. ${st.note}` : "");
-          if (st.failed) toast("error", "Сбор завершён с ошибками", text);
-          else if (!ok) toast("info", "Данные уже свежие", "Все клиенты обновлялись недавно — запросы на сайты не отправлялись");
-          else toast("success", "Сбор завершён", text);
-        }
+        if (announce && st.total) summaryToast(st);
         break;
       }
       await new Promise((r) => setTimeout(r, 1000));
     }
   } catch (e) {
-    toast("error", "Ошибка опроса статуса", e.message);
+    showSync({ running: false });
+    if (e.status !== 401) toast("error", "Не удалось получить состояние обновления", e.message);
   } finally {
     polling = false;
-    lastDone = -1;
   }
 }
 
 syncBtn.addEventListener("click", async () => {
+  if (syncBtn.disabled) return;
+  syncBtn.disabled = true;
   try {
     const st = await api.syncAll();
     if (!st.total && !st.running) {
-      toast("info", "Нет активных клиентов", "Добавьте клиента или включите существующих");
+      showSync(st);
+      toast("info", "Нет клиентов для обновления", "Добавьте клиента или включите автообновление у существующих");
       return;
     }
     showSync(st);
-    pollSync();
+    pollSync(true);
   } catch (e) {
-    toast("error", "Не удалось запустить сбор", e.message);
+    showSync({ running: false });
+    if (e.status !== 401) toast("error", "Не удалось запустить обновление", e.message);
   }
 });
 
 // ---------- next scheduled run ----------
 const nextRunEl = document.getElementById("next-run");
-export async function refreshNextRun() {
-  if (document.body.classList.contains("auth-locked")) return;
+async function refreshNextRun() {
+  if (locked()) return;
   try {
     const s = await api.settings();
-    if (!s.schedule_enabled || !s.next_run) {
-      nextRunEl.innerHTML = "Авто-сбор <b>выключен</b>";
-      return;
-    }
+    if (!s.schedule_enabled || !s.next_run) { nextRunEl.textContent = ""; return; }
     const d = new Date(s.next_run);
     const today = new Date().toDateString() === d.toDateString();
-    nextRunEl.innerHTML = `Следующий сбор: <b>${today ? "" : "завтра "}${fmtTime(d)}</b>`;
+    nextRunEl.innerHTML = `Обновление ${today ? "в" : "завтра в"} <b>${fmtTime(d)}</b>`;
   } catch { nextRunEl.textContent = ""; }
 }
 window.addEventListener("settings:changed", refreshNextRun);
-window.addEventListener("sync:start", () => pollSync());
 
-// Catch scheduled runs that start while the page is open.
-setInterval(async () => {
-  if (polling || document.body.classList.contains("auth-locked")) return;
+// Scheduled runs that start while the page is open.
+async function checkBackgroundSync() {
+  if (polling || locked() || document.hidden) return;
   try {
     const st = await api.syncStatus();
     if (st.running) pollSync();
-  } catch { /* server offline */ }
-}, 15000);
+  } catch { /* offline */ }
+}
 
-// ---------- auth ----------
+// ---------- sign-in ----------
 let started = false;
 
 function start() {
@@ -173,14 +187,16 @@ function start() {
   if (!started) {
     started = true;
     setInterval(refreshNextRun, 60000);
+    setInterval(checkBackgroundSync, 15000);
   }
   route();
   refreshNextRun();
-  api.syncStatus().then((st) => { if (st.running) pollSync(); }).catch(() => {});
+  checkBackgroundSync();
 }
 
 function requireLogin() {
-  if (cleanup) { try { cleanup(); } catch { /* ignore */ } cleanup = null; }
+  renderSeq++;
+  runCleanup();
   view.innerHTML = "";
   showLogin(start);
 }
@@ -192,4 +208,8 @@ document.getElementById("logout").addEventListener("click", async () => {
   requireLogin();
 });
 
-api.me().then(start).catch(requireLogin);
+api.me().then(start).catch((e) => {
+  if (e.status === 401) { requireLogin(); return; }
+  document.body.classList.remove("auth-pending");
+  toast("error", "Сервис недоступен", "Обновите страницу чуть позже");
+});

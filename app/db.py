@@ -215,20 +215,28 @@ def now_iso() -> str:
     return now().isoformat(timespec="seconds")
 
 
+def _run(fn):
+    """Run fn(connection). A connection that died while idle (sleep, network change) is
+    replaced by the pool, so one retry is enough to hide the hiccup from the user."""
+    try:
+        with pool().connection() as c:
+            return fn(c)
+    except psycopg.OperationalError:
+        with pool().connection() as c:
+            return fn(c)
+
+
 def query(sql: str, params: tuple | dict | None = None) -> list[dict]:
-    with pool().connection() as c:
-        return c.execute(sql, params).fetchall()
+    return _run(lambda c: c.execute(sql, params).fetchall())
 
 
 def query_one(sql: str, params: tuple | dict | None = None) -> dict | None:
-    with pool().connection() as c:
-        return c.execute(sql, params).fetchone()
+    return _run(lambda c: c.execute(sql, params).fetchone())
 
 
 def execute(sql: str, params: tuple | dict | None = None) -> int:
     """Run a write statement; returns the affected row count."""
-    with pool().connection() as c:
-        return c.execute(sql, params).rowcount
+    return _run(lambda c: c.execute(sql, params).rowcount)
 
 
 # ---------- settings (cached: they are read on every request) ----------

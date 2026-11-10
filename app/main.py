@@ -62,6 +62,13 @@ async def require_login(request: Request, call_next):
     return await call_next(request)
 
 
+@app.exception_handler(Exception)
+async def unexpected_error(request: Request, exc: Exception):
+    """Database hiccups and bugs: log the details, show the user a calm message."""
+    logging.getLogger("app").exception("unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse({"detail": "Сервис временно недоступен. Попробуйте ещё раз чуть позже."}, status_code=503)
+
+
 # ---------- auth ----------
 
 class LoginIn(BaseModel):
@@ -76,12 +83,15 @@ class CredentialsIn(BaseModel):
     new_password: str = Field(min_length=8, max_length=200)
 
 
-def _set_session_cookie(request: Request, response: Response, login: str, remember: bool) -> None:
-    value, ttl = auth.make_session(login, remember)
+def _send_cookie(request: Request, response: Response, value: str, remember: bool) -> None:
     response.set_cookie(
-        auth.COOKIE_NAME, value, max_age=ttl if remember else None, httponly=True,
+        auth.COOKIE_NAME, value, max_age=auth.COOKIE_MAX_AGE if remember else None, httponly=True,
         samesite="lax", secure=request.url.scheme == "https", path="/",
     )
+
+
+def _set_session_cookie(request: Request, response: Response, login: str, remember: bool) -> None:
+    _send_cookie(request, response, auth.make_session(login, remember), remember)
 
 
 @app.post("/api/auth/login")
@@ -109,17 +119,22 @@ def logout(response: Response):
 
 
 @app.get("/api/auth/me")
-def me(request: Request):
-    login_name = auth.read_session(request.cookies.get(auth.COOKIE_NAME))
-    if not login_name:
+def me(request: Request, response: Response):
+    cookie = request.cookies.get(auth.COOKIE_NAME)
+    parsed = auth.parse_session(cookie)
+    if not parsed:
         raise HTTPException(401, "Требуется вход")
+    login_name, remember = parsed
+    if remember:  # renew the cookie on every visit, so "remember me" never runs out
+        _send_cookie(request, response, cookie, True)
     return {"login": login_name}
 
 
 @app.put("/api/auth/credentials")
 async def change_credentials(body: CredentialsIn, request: Request, response: Response):
-    login_name = await asyncio.to_thread(auth.read_session, request.cookies.get(auth.COOKIE_NAME))
-    stored = await asyncio.to_thread(auth.current_password, login_name or "")
+    parsed = await asyncio.to_thread(auth.parse_session, request.cookies.get(auth.COOKIE_NAME))
+    login_name, remember = parsed or ("", False)
+    stored = await asyncio.to_thread(auth.current_password, login_name)
     if stored is None or not hmac.compare_digest(body.current_password.encode(), stored.encode()):
         await asyncio.sleep(0.6)
         raise HTTPException(400, "Текущий пароль указан неверно")
@@ -128,7 +143,8 @@ async def change_credentials(body: CredentialsIn, request: Request, response: Re
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
     new_login = body.new_login.strip()
-    await asyncio.to_thread(_set_session_cookie, request, response, new_login, True)  # other sessions end
+    # A new cookie for this browser; every other session of the user ends.
+    await asyncio.to_thread(_set_session_cookie, request, response, new_login, remember)
     return {"login": new_login}
 
 
@@ -358,7 +374,19 @@ def put_settings(body: SettingsIn):
 
 # ---------- frontend ----------
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+class AppStatic(StaticFiles):
+    """Static files that are always revalidated, so an update never mixes old and new scripts."""
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if path.startswith("fonts/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/static", AppStatic(directory=STATIC_DIR), name="static")
 
 
 @app.get("/")

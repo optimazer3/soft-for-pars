@@ -77,7 +77,23 @@ export function relTime(iso) {
   if (s < 172800) return `вчера в ${fmtTime(d)}`;
   return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
+/** Relative time that can be refreshed in place (see refreshRelTimes). */
+export const relSpan = (iso) => html`<span data-rel="${iso || ""}" title="${iso ? new Date(iso).toLocaleString("ru-RU") : ""}">${relTime(iso)}</span>`;
+export function refreshRelTimes(root) {
+  root.querySelectorAll("[data-rel]").forEach((el) => { el.textContent = relTime(el.dataset.rel); });
+}
 export const fmtTime = (d) => d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+
+/** "2026-11-07" -> "07.11.2026" without time-zone shifts. */
+export function fmtDay(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || "");
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : "";
+}
+
+/** Toast for a failed manual refresh (429 = data is still fresh, not an error). */
+export function syncErrorToast(err) {
+  err.status === 429 ? toast("info", "Данные ещё свежие", err.message) : toast("error", "Не удалось обновить", err.message);
+}
 
 const MONTHS = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь"];
 export function fmtPeriod(p) {
@@ -91,7 +107,7 @@ export function plural(n, one, few, many) {
   return `${n} ${w}`;
 }
 
-export const STATUS_TEXT = { ok: "Собрано", error: "Ошибка", running: "Собирается…", never: "Ещё не собирали" };
+export const STATUS_TEXT = { ok: "Обновлено", error: "Ошибка", running: "Обновляется…", never: "Нет данных" };
 
 export function debounce(fn, ms = 150) {
   let t;
@@ -132,19 +148,6 @@ function tick(t) {
   });
   rafId = counters.length ? requestAnimationFrame(tick) : 0;
 }
-
-// ---------- ripple on buttons ----------
-document.addEventListener("pointerdown", (e) => {
-  const b = e.target.closest(".btn");
-  if (!b || b.disabled || reduceMotion) return;
-  const r = b.getBoundingClientRect();
-  const s = Math.max(r.width, r.height);
-  const span = document.createElement("span");
-  span.className = "ripple";
-  span.style.cssText = `width:${s}px;height:${s}px;left:${e.clientX - r.left - s / 2}px;top:${e.clientY - r.top - s / 2}px`;
-  b.appendChild(span);
-  span.addEventListener("animationend", () => span.remove());
-});
 
 // ---------- sliding indicators (tabs / segmented) ----------
 export function moveIndicator(indicator, target) {

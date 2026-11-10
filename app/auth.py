@@ -24,7 +24,10 @@ from dataclasses import dataclass
 from . import db
 
 COOKIE_NAME = "od_session"
-SESSION_DAYS_REMEMBER = 30
+# "Remember me" = stay signed in for good: the token is valid for 10 years and the cookie
+# (browsers cap cookie lifetime at ~400 days) is renewed on every visit.
+SESSION_DAYS_REMEMBER = 3650
+COOKIE_MAX_AGE = 400 * 86400
 SESSION_HOURS_DEFAULT = 12
 
 DEFAULT_LOGIN = "admin"
@@ -134,33 +137,41 @@ def _fingerprint(password: str) -> str:
     return hmac.new(_session_key(), b"pw:" + password.encode(), hashlib.sha256).hexdigest()[:16]
 
 
-def make_session(login: str, remember: bool) -> tuple[str, int]:
-    """Returns (cookie value, max-age seconds)."""
+def make_session(login: str, remember: bool) -> str:
+    """Signed cookie value: login | expiry | password fingerprint | remember flag | nonce."""
     ttl = SESSION_DAYS_REMEMBER * 86400 if remember else SESSION_HOURS_DEFAULT * 3600
     pw = current_password(login) or ""
     login_b64 = base64.urlsafe_b64encode(login.encode()).decode()
-    payload = f"{login_b64}|{int(time.time()) + ttl}|{_fingerprint(pw)}|{secrets.token_hex(8)}"
+    payload = (f"{login_b64}|{int(time.time()) + ttl}|{_fingerprint(pw)}|"
+               f"{'r' if remember else 's'}|{secrets.token_hex(8)}")
     token = base64.urlsafe_b64encode(payload.encode()).decode()
-    return f"{token}.{_sign(payload)}", ttl
+    return f"{token}.{_sign(payload)}"
 
 
-def read_session(cookie: str | None) -> str | None:
-    """Login name if the cookie is valid, else None."""
+def parse_session(cookie: str | None) -> tuple[str, bool] | None:
+    """(login, remember) if the cookie is valid, else None."""
     if not cookie or "." not in cookie:
         return None
     token, sig = cookie.rsplit(".", 1)
     try:
         payload = base64.urlsafe_b64decode(token.encode()).decode()
-        login_b64, expires, fingerprint, _ = payload.split("|")
+        login_b64, expires, fingerprint, flag, _ = payload.split("|")
         login = base64.urlsafe_b64decode(login_b64.encode()).decode()
+        expires_at = int(expires)
     except (ValueError, UnicodeDecodeError):
         return None
-    if not hmac.compare_digest(sig, _sign(payload)) or int(expires) < time.time():
+    if not hmac.compare_digest(sig, _sign(payload)) or expires_at < time.time():
         return None
     pw = current_password(login)
     if pw is None or not hmac.compare_digest(fingerprint, _fingerprint(pw)):
         return None
-    return login
+    return login, flag == "r"
+
+
+def read_session(cookie: str | None) -> str | None:
+    """Login name if the cookie is valid, else None."""
+    parsed = parse_session(cookie)
+    return parsed[0] if parsed else None
 
 
 # ---------- brute-force protection ----------
@@ -181,6 +192,10 @@ def lock_remaining(ip: str) -> int:
 
 def register_failure(ip: str) -> int:
     """Count a failed login; returns lock seconds (0 if not locked yet)."""
+    if len(_attempts) > 5000:  # don't let the table grow without bound
+        now = time.time()
+        for key in [k for k, v in _attempts.items() if v.locked_until < now]:
+            del _attempts[key]
     a = _attempts[ip]
     a.fails += 1
     if a.fails >= FREE_ATTEMPTS:

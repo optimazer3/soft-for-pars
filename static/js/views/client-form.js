@@ -1,52 +1,51 @@
-// Add / edit a client, with "test connection".
+// Add / edit a client, with a connection check.
 import { api } from "../api.js";
-import { fmtPeriod, html, icon, mount, toast, withBusy } from "../ui.js";
+import { fmtPeriod, html, icon, mount, plural, toast, withBusy } from "../ui.js";
 
 export async function render(root, [idParam]) {
   const id = idParam ? +idParam : null;
   const c = id ? await api.client(id) : { name: "", base_url: "", login: "", enabled: true, notes: "" };
 
   mount(root, html`
-    ${id ? html`<a class="back" href="#/clients">${icon("arrowLeft")} К списку клиентов</a>` : ""}
+    ${id ? html`<a class="back" href="#/clients">${icon("arrowLeft")} Клиенты</a>` : ""}
     <div class="page-head">
       <div>
-        <h1 class="page-title">${id ? `Редактирование: ${c.name}` : "Новый клиент"}</h1>
-        <div class="page-sub">${id ? "Измените данные и сохраните" : "Укажите сайт Оптимайзера клиента и данные для входа"}</div>
+        <h1 class="page-title">${id ? c.name : "Новый клиент"}</h1>
+        <div class="page-sub">${id ? "Редактирование клиента" : "Сайт Оптимайзера клиента и данные для входа"}</div>
       </div>
     </div>
     <div class="form-layout">
       <form class="card" id="form" autocomplete="off" novalidate>
-        <div class="field"><input id="name" placeholder=" " value="${c.name}" required><label for="name">Название клиента</label></div>
+        <div class="field"><input id="name" placeholder=" " value="${c.name}" maxlength="200" required><label for="name">Название клиента</label></div>
         <div class="field">
-          <input id="base_url" placeholder=" " value="${c.base_url}" required><label for="base_url">Адрес сайта Оптимайзера</label>
-          <div class="help">Например: demo-optics.optmzr.ru — можно вставить ссылку целиком</div>
+          <input id="base_url" placeholder=" " value="${c.base_url}" required spellcheck="false"><label for="base_url">Адрес сайта Оптимайзера</label>
+          <div class="help">Например, demo-optics.optmzr.ru — можно вставить ссылку целиком</div>
         </div>
         <div class="field-row">
-          <div class="field"><input id="login" placeholder=" " value="${c.login}" required autocomplete="off"><label for="login">Логин</label></div>
+          <div class="field"><input id="login" placeholder=" " value="${c.login}" required autocomplete="off" spellcheck="false"><label for="login">Логин</label></div>
           <div class="field">
             <input id="password" type="password" placeholder=" " autocomplete="new-password"><label for="password">${id ? "Новый пароль" : "Пароль"}</label>
-            <button type="button" class="icon-btn eye" id="eye" title="Показать пароль">${icon("eye")}</button>
+            <button type="button" class="icon-btn eye" id="eye" title="Показать пароль" aria-label="Показать пароль">${icon("eye")}</button>
             ${id ? html`<div class="help">Оставьте пустым, чтобы не менять</div>` : ""}
           </div>
         </div>
         <div class="field"><textarea id="notes" placeholder=" ">${c.notes}</textarea><label for="notes">Заметка (необязательно)</label></div>
         <label class="check-row"><span class="switch"><input type="checkbox" id="enabled" ${c.enabled ? "checked" : ""}><span></span></span>
-          Собирать данные по расписанию</label>
+          Обновлять данные по расписанию</label>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary" id="save">${icon("check")} ${id ? "Сохранить" : "Добавить клиента"}</button>
-          <button type="button" class="btn" id="test">${icon("plug")} Проверить</button>
+          <button type="button" class="btn" id="test">${icon("plug")} Проверить подключение</button>
           <a class="btn btn-ghost" href="${id ? "#/clients" : "#/dashboard"}">Отмена</a>
         </div>
       </form>
-      <div>
+      <div class="side-col">
         <div id="test-out"></div>
         <div class="card tips">
-          <h3>Подсказка</h3>
-          <ol>
-            <li>Адрес — это ссылка, по которой клиент заходит в Оптимайзер, например <code>https://demo-optics.optmzr.ru</code>.</li>
-            <li>Нажмите «Проверить»: программа войдёт на сайт и покажет найденные салоны.</li>
-            <li>Логин и пароль сохраняются в базе Supabase (таблица <code>app.clients</code>) и используются только для входа на сайт клиента.</li>
-          </ol>
+          <h3>Как добавить клиента</h3>
+          <ul>
+            <li>${icon("check")}<span>Укажите адрес, по которому клиент заходит в Оптимайзер, и его логин с паролем.</span></li>
+            <li>${icon("check")}<span>«Проверить подключение» покажет, получилось ли войти и какие салоны найдены.</span></li>
+          </ul>
         </div>
       </div>
     </div>`);
@@ -73,6 +72,7 @@ export async function render(root, [idParam]) {
 
   function validate(v, needPassword, needName = true) {
     let ok = true;
+    $("#name").closest(".field").classList.remove("invalid");
     const req = [...(needName ? ["name"] : []), "base_url", "login", ...(needPassword ? ["password"] : [])];
     req.forEach((k) => {
       const field = $(`#${k}`).closest(".field");
@@ -83,8 +83,10 @@ export async function render(root, [idParam]) {
         ok = false;
       }
     });
+    if (!ok) form.querySelector(".field.invalid input")?.focus();
     return ok;
   }
+  form.addEventListener("input", (e) => e.target.closest(".field")?.classList.remove("invalid"));
 
   $("#test").addEventListener("click", async (e) => {
     const v = values();
@@ -93,14 +95,17 @@ export async function render(root, [idParam]) {
       out.innerHTML = "";
       try {
         const r = await api.testConnection({ base_url: v.base_url, login: v.login, password: v.password, client_id: id });
-        mount(out, html`<div class="test-result ok" style="margin-bottom:16px">
+        if (!root.isConnected) return;
+        mount(out, html`<div class="test-result ok">
           <h4>${icon("check")} Подключение работает</h4>
-          <dl><dt>Сайт</dt><dd>${r.base_url}</dd><dt>Пользователь</dt><dd>${r.user} (${r.role})</dd>
-          <dt>Период</dt><dd>${fmtPeriod(r.period)}</dd><dt>Салонов</dt><dd>${r.branches.length}</dd></dl>
+          <dl><dt>Сайт</dt><dd>${r.base_url.replace(/^https?:\/\//, "")}</dd>
+          <dt>Период</dt><dd>${fmtPeriod(r.period)}</dd>
+          <dt>Найдено</dt><dd>${plural(r.branches.length, "салон", "салона", "салонов")}</dd></dl>
           <div class="chips">${r.branches.map((b) => html`<span class="chip">${icon("store")} ${b}</span>`)}</div></div>`);
         if (!$("#name").value.trim()) $("#name").value = hostToName(r.base_url);
       } catch (err) {
-        mount(out, html`<div class="test-result err" style="margin-bottom:16px"><h4>${icon("alert")} Не удалось подключиться</h4>${err.message}</div>`);
+        if (!root.isConnected) return;
+        mount(out, html`<div class="test-result err"><h4>${icon("alert")} Не удалось подключиться</h4>${err.message}</div>`);
       }
     });
   });
@@ -108,7 +113,7 @@ export async function render(root, [idParam]) {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const v = values();
-    if (!validate(v, !id)) { form.classList.remove("shake"); void form.offsetWidth; form.classList.add("shake"); return; }
+    if (!validate(v, !id)) return;
     await withBusy($("#save"), async () => {
       try {
         if (id) {
@@ -117,14 +122,14 @@ export async function render(root, [idParam]) {
           location.hash = "#/clients";
         } else {
           const created = await api.createClient(v);
-          toast("info", "Клиент добавлен", "Собираю данные…");
+          toast("info", "Клиент добавлен", "Загружаю показатели…");
           location.hash = "#/dashboard";
+          const notify = () => window.dispatchEvent(new CustomEvent("sync:done", { detail: {} }));
           api.syncClient(created.id).then((r) => {
-            r.ok ? toast("success", `${created.name}: данные собраны`) : toast("error", `${created.name}: ошибка сбора`, r.error);
-            window.dispatchEvent(new CustomEvent("sync:done", { detail: {} }));
-          }).catch(() => {});
-          // Let the dashboard show the "running" state right away.
-          setTimeout(() => window.dispatchEvent(new CustomEvent("sync:progress", { detail: {} })), 400);
+            r.ok ? toast("success", "Данные загружены", created.name) : toast("error", `${created.name}: не удалось загрузить данные`, r.error);
+          }).catch(() => {}).finally(notify);
+          // Let the dashboard show the "updating" state right away.
+          setTimeout(notify, 600);
         }
       } catch (err) {
         toast("error", "Не удалось сохранить", err.message);

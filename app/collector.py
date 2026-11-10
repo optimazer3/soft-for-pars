@@ -192,15 +192,19 @@ class Collector:
                                 return
                             row = queue.pop(0)
                         if stopped:
+                            # last_sync_at is left alone: no attempt was made
                             await adb(db.execute,
-                                      "UPDATE app.clients SET last_status = 'error', last_error = %s, last_sync_at = %s "
-                                      "WHERE id = %s",
-                                      ("Пропущен: сервер Оптимайзера перегружен, повторим при следующем сборе",
-                                       db.now(), row["id"]))
+                                      "UPDATE app.clients SET last_status = 'error', last_error = %s WHERE id = %s",
+                                      ("Сайт Оптимайзера перегружен — обновление отложено до следующего запуска",
+                                       row["id"]))
                             self.state.done += 1
                             self.state.failed += 1
                             continue
-                        result = await self.sync_client(row["id"], respect_cooldown=False)
+                        try:
+                            result = await self.sync_client(row["id"], respect_cooldown=False)
+                        except Exception as exc:  # noqa: BLE001 - e.g. the client was deleted meanwhile
+                            log.warning("sync %s skipped: %s", row["id"], exc)
+                            result = {"ok": False, "busy": False}
                         self.state.done += 1
                         self.state.requests = self.throttle.requests_sent - requests_before
                         if result["ok"]:

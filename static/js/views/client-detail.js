@@ -1,7 +1,10 @@
 // One client: all metrics by group, switchable between "all branches" and each branch.
 import { api } from "../api.js";
 import { GROUPS, METRICS, formatValue, metricKind, metricLabel, metricStatus } from "../metrics.js";
-import { avatar, fmtPeriod, hostOf, html, icon, mount, relTime, segmented, toast, withBusy } from "../ui.js";
+import {
+  avatar, fmtDay, fmtPeriod, hostOf, html, icon, mount, refreshRelTimes, relSpan, segmented,
+  syncErrorToast, toast, withBusy,
+} from "../ui.js";
 import { tile } from "./dashboard.js";
 import { planBar, planCell } from "../plan.js";
 
@@ -18,24 +21,16 @@ export async function render(root, [idParam]) {
     return groups;
   }
 
-  function scopeKpi(prevScope) {
-    if (!snapshot) return {};
-    if (scope === "all") return snapshot.kpi;
-    return snapshot.branches.find((b) => b.id === scope)?.kpi || {};
-  }
-
-  function scopeProgress() {
-    if (!snapshot) return null;
-    if (scope === "all") return snapshot.progress;
-    return snapshot.branches.find((b) => b.id === scope)?.progress || null;
-  }
+  const branch = () => (scope === "all" ? null : snapshot?.branches.find((b) => b.id === scope));
+  const scopeKpi = () => (!snapshot ? {} : scope === "all" ? snapshot.kpi : branch()?.kpi || {});
+  const scopeProgress = () => (!snapshot ? null : scope === "all" ? snapshot.progress : branch()?.progress || null);
 
   function metricsHtml(prev, prevProgress) {
-    const kpi = scopeKpi();
-    const branch = scope !== "all" && snapshot.branches.find((b) => b.id === scope);
-    if (branch && !branch.kpi) {
-      return html`<div class="error-banner">${icon("alert")}<div>По салону не удалось получить данные: ${branch.error || ""}</div></div>`;
+    const b = branch();
+    if (b && !b.kpi) {
+      return html`<div class="error-banner">${icon("alert")}<div><b>По этому салону данные получить не удалось.</b> ${b.error || ""}</div></div>`;
     }
+    const kpi = scopeKpi();
     const sections = groupsFor(kpi).map(([title, ks]) => html`<div class="section">
       <h2 class="section-title">${title}</h2>
       <div class="tiles auto stagger">${ks.map((k, i) => tile(k, kpi[k], i, prev?.[k]?.current))}</div></div>`);
@@ -52,7 +47,7 @@ export async function render(root, [idParam]) {
     };
     return html`<div class="section"><h2 class="section-title">Сравнение салонов</h2>
       <div class="table-wrap"><table class="grid compare">
-        <thead><tr><th>Показатель</th>${br.map((b) => html`<th class="num">${b.name}</th>`)}<th class="num">Итого</th></tr></thead>
+        <thead><tr><th>Показатель</th>${br.map((b) => html`<th class="num">${b.name}</th>`)}<th class="num">Все салоны</th></tr></thead>
         <tbody>
           <tr><td>План продаж на очки</td>${br.map((b) => html`<td class="num">${planCell(b.progress, "exec")}</td>`)}<td class="num">${planCell(snapshot.progress, "exec")}</td></tr>
           <tr><td>Прогноз выполнения</td>${br.map((b) => html`<td class="num">${planCell(b.progress, "forecast")}</td>`)}<td class="num">${planCell(snapshot.progress, "forecast")}</td></tr>
@@ -63,8 +58,9 @@ export async function render(root, [idParam]) {
 
   function draw() {
     const s = snapshot;
+    if (s && scope !== "all" && !s.branches.some((b) => b.id === scope)) scope = "all";
     mount(root, html`
-      <a class="back" href="#/dashboard">${icon("arrowLeft")} Ко всем клиентам</a>
+      <a class="back" href="#/dashboard">${icon("arrowLeft")} Все клиенты</a>
       <div class="detail-head">
         ${avatar(client.name)}
         <div style="flex:1;min-width:0">
@@ -72,8 +68,8 @@ export async function render(root, [idParam]) {
           <div class="page-sub">
             <a class="chip" href="${client.base_url}" target="_blank" rel="noopener">${hostOf(client.base_url)} ${icon("external")}</a>
             ${s ? html`<span class="chip">${icon("calendar")} ${fmtPeriod(s.period)}</span>` : ""}
-            <span class="chip">${icon("clock")} Обновлено ${relTime(client.last_sync_at)}</span>
-            ${s?.source_updated_at ? html`<span class="chip">Данные Оптимайзера от <b>${new Date(s.source_updated_at).toLocaleDateString("ru-RU")}</b></span>` : ""}
+            ${s ? html`<span class="chip">${icon("clock")} Обновлено ${relSpan(s.fetched_at)}</span>` : ""}
+            ${s?.source_updated_at ? html`<span class="chip">Данные актуальны на <b>${fmtDay(s.source_updated_at)}</b></span>` : ""}
           </div>
         </div>
         <div class="toolbar">
@@ -81,7 +77,7 @@ export async function render(root, [idParam]) {
           <button class="btn btn-primary" id="sync">${icon("refresh")} Обновить</button>
         </div>
       </div>
-      ${client.last_status === "error" && client.last_error ? html`<div class="error-banner">${icon("alert")}<div><b>Последний сбор завершился ошибкой.</b> ${client.last_error}</div></div>` : ""}
+      ${client.last_status === "error" && client.last_error ? html`<div class="error-banner">${icon("alert")}<div><b>Последнее обновление не удалось.</b> ${client.last_error}</div></div>` : ""}
       ${s ? html`
         ${s.branches.length > 1 ? html`<div class="branch-tabs"><div class="segmented" id="scope">
           <button data-value="all" class="${scope === "all" ? "active" : ""}">Все салоны</button>
@@ -89,8 +85,8 @@ export async function render(root, [idParam]) {
         </div></div>` : ""}
         <div id="metrics">${metricsHtml()}</div>
         ${compareHtml()}`
-      : html`<div class="empty"><div class="big-ico">${icon("refresh")}</div><h3>Данные ещё не собраны</h3>
-          <p>Нажмите «Обновить», чтобы собрать данные с сайта клиента.</p></div>`}
+      : html`<div class="empty"><div class="big-ico">${icon("refresh")}</div><h3>Данных пока нет</h3>
+          <p>Нажмите «Обновить», чтобы получить показатели с сайта клиента.</p></div>`}
     `);
 
     const scopeEl = root.querySelector("#scope");
@@ -106,20 +102,27 @@ export async function render(root, [idParam]) {
     root.querySelector("#sync").addEventListener("click", (e) => withBusy(e.currentTarget, async () => {
       try {
         const res = await api.syncClient(id);
-        res.ok ? toast("success", "Данные обновлены") : toast("error", "Ошибка сбора", res.error);
-        ({ client, snapshot } = await api.snapshot(id));
-        draw();
+        res.ok ? toast("success", "Данные обновлены") : toast("error", "Не удалось обновить", res.error);
+        await reload();
       } catch (err) {
-        err.status === 429 ? toast("info", "Данные ещё свежие", err.message) : toast("error", "Ошибка", err.message);
+        syncErrorToast(err);
       }
     }));
   }
+
+  async function reload() {
+    const fresh = await api.snapshot(id);
+    if (!root.isConnected) return;
+    ({ client, snapshot } = fresh);
+    draw();
+  }
   draw();
 
-  const onDone = async () => {
-    ({ client, snapshot } = await api.snapshot(id));
-    if (root.isConnected) draw();
-  };
+  const onDone = () => reload().catch(() => {});
+  const timer = setInterval(() => refreshRelTimes(root), 60000);
   window.addEventListener("sync:done", onDone);
-  return () => window.removeEventListener("sync:done", onDone);
+  return () => {
+    window.removeEventListener("sync:done", onDone);
+    clearInterval(timer);
+  };
 }
