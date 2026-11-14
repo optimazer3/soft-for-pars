@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from urllib.parse import urlsplit
 
 import httpx
@@ -104,6 +104,22 @@ class Collector:
             "period": period,
             "branches": [b["name"] for b in branches],
         }
+
+    async def sync_daily_signals(self, client_id: int, day: date) -> bool:
+        lock = self._client_locks.setdefault(client_id, asyncio.Lock())
+        async with lock:
+            existing = await adb(db.latest_signals, client_id, day, True)
+            if db.signals_complete(existing):
+                return True
+            row = await adb(db.query_one, "SELECT * FROM app.clients WHERE id = %s", (client_id,))
+            if not row or not row.get("password"):
+                raise OptimizerError("Укажите пароль клиента")
+            await self._apply_settings()
+            client = self._client(row["base_url"], row["login"], row["password"])
+            signals = await client.collect_daily_signals(day)
+            if signals:
+                await adb(db.save_daily_signals, client_id, day, signals)
+            return signals is not None or existing is not None
 
     @staticmethod
     def _fresh(row: dict, cooldown_min: int) -> float | None:

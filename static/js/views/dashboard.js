@@ -6,7 +6,7 @@ import {
   relSpan, segmented, STATUS_TEXT, syncErrorToast, toast, withBusy,
 } from "../ui.js";
 import { planCell } from "../plan.js";
-import { dataDate, hoursCell, ratioCell, signalsCell, summaryGrid, tasksStatus } from "../summary.js";
+import { hoursCell, kpiDate, ratioCell, signalsCell, snapshotDate, summaryGrid, tasksStatus } from "../summary.js";
 import { editMetrics } from "../metric-editor.js";
 import { reportDay, selectReportDay } from "../report-date.js";
 
@@ -53,7 +53,7 @@ function panel(c, i, prevSnap, canSync = true) {
         <div class="panel-meta">
           <a href="${c.base_url}" target="_blank" rel="noopener">${hostOf(c.base_url)}</a>
           ${s ? html`${sep}<span>${plural(s.branches_count, "салон", "салона", "салонов")}</span>` : ""}
-          ${dataDate(s) ? html`${sep}<span>данные на ${dataDate(s)}</span>` : ""}
+          ${snapshotDate(s) ? html`${sep}<span>снимок от ${snapshotDate(s)}</span>` : ""}
           ${s?.fetched_at ? html`${sep}<span>обновлено ${relSpan(s.fetched_at)}</span>` : ""}
         </div>
       </div>
@@ -109,7 +109,7 @@ export async function render(root) {
     if (sort.key === "_created") return x.tasks_created ?? null;
     if (sort.key === "_signals") return x.signals?.done ?? null;
     if (sort.key === "_analysis") return x.analysis_tasks ?? null;
-    if (sort.key === "_date") return c.snapshot?.source_updated_at ?? null;
+    if (sort.key === "_date") return c.snapshot?.fetched_at ? c.snapshot.day : null;
     return c.snapshot?.kpi[sort.key]?.current ?? null;
   };
 
@@ -146,9 +146,9 @@ export async function render(root) {
     if (mode === "cards") {
       return html`<div class="panels stagger">${list.map((c, i) => panel(c, i, prev[c.id], !day || day === data.today))}</div>`;
     }
-    const th = (key, label, num = true) => html`<th class="sortable ${num ? "num" : ""} ${sort.key === key ? `sorted ${sort.dir < 0 ? "desc" : ""}` : ""}" data-sort="${key}">${label}<span class="arrow">▲</span></th>`;
+    const th = (key, label, num = true) => html`<th scope="col" class="sortable ${num ? "num" : ""} ${sort.key === key ? `sorted ${sort.dir < 0 ? "desc" : ""}` : ""}" data-sort="${key}"><span class="column-label">${label}</span><span class="arrow" aria-hidden="true">▲</span></th>`;
     return html`<div class="table-wrap"><table class="grid kpi-table">
-      <thead><tr>${th("name", "Клиент", false)}${th("_exec", "План продаж")}${th("_forecast", "Прогноз")}${th("sales_amount", "Сумма заказов")}${th("vtl_orders_count", "Заказы ВТЛ")}${th("_activity", "Активность")}${th("_tasks_prev", "Задачи прошлой недели")}${th("_tasks", "Задачи этой недели")}${th("_created", "Задач поставлено за день")}${th("_signals", "Сигналы · разобрано / всего")}${th("_analysis", "Задачи из анализа филиалов")}${th("_badges", "Бейджи")}${th("_date", "Данные на")}<th scope="col" aria-label="Действия"></th></tr></thead>
+      <thead><tr>${th("name", "Клиент", false)}${th("_exec", "План продаж")}${th("_forecast", "Прогноз")}${th("sales_amount", "Сумма заказов")}${th("vtl_orders_count", "Заказы ВТЛ")}${th("_activity", "Активность")}${th("_tasks_prev", "Задачи прошлой недели")}${th("_tasks", "Задачи этой недели")}${th("_created", "Задач поставлено за день")}${th("_signals", "Сигналы · разобрано / всего")}${th("_analysis", "Задачи из анализа филиалов")}${th("_badges", "Бейджи")}${th("_date", "Дата снимка")}<th scope="col" aria-label="Действия"></th></tr></thead>
       <tbody>${list.map((c, i) => html`<tr style="--i:${i}" data-id="${c.id}">
         <td><div class="project-cell"><a class="client-cell" href="#/client/${c.id}">${avatar(c.name)}<span>
           <div class="name">${c.name}</div>
@@ -165,7 +165,7 @@ export async function render(root) {
         <td class="num">${signalsCell(c.snapshot?.extras?.signals)}</td>
         <td class="num">${formatValue(c.snapshot?.extras?.analysis_tasks, "count")}</td>
         <td class="num">${ratioCell(c.snapshot?.extras?.badges && { done: c.snapshot.extras.badges.issued, total: c.snapshot.extras.badges.total })}</td>
-        <td class="num cell-muted">${dataDate(c.snapshot) || "—"}</td>
+        <td class="num cell-muted" title="${kpiDate(c.snapshot) ? `KPI в Оптимайзере на ${kpiDate(c.snapshot)}` : ""}">${snapshotDate(c.snapshot) || "—"}</td>
         <td><div class="row-actions">
           ${!day || day === data.today ? html`<button class="icon-btn" data-act="sync" title="Обновить сейчас" aria-label="Обновить сейчас" ${c.last_status === "running" ? "disabled" : ""}>${icon("refresh", c.last_status === "running" ? "spin" : "")}</button>` : ""}
         </div></td>
@@ -177,6 +177,7 @@ export async function render(root) {
       <div>
         <h1 class="page-title">Дашборд</h1>
         <div class="page-sub" id="summary">${summaryHtml()}</div>
+        <div class="page-sub" id="signal-status" role="status" hidden></div>
       </div>
       <div class="toolbar">
         <label class="search">${icon("search")}<input id="q" placeholder="Поиск клиента" aria-label="Поиск клиента"></label>
@@ -197,7 +198,15 @@ export async function render(root) {
   const input = root.querySelector("#q");
   const dateInput = root.querySelector("#report-day");
   const latest = root.querySelector("#latest-data");
-  const drawBody = (prev) => mount(bodyEl, bodyHtml(prev));
+  const signalStatus = root.querySelector("#signal-status");
+  const drawBody = (prev) => {
+    const scrollLeft = bodyEl.querySelector(".table-wrap")?.scrollLeft || 0;
+    mount(bodyEl, bodyHtml(prev));
+    if (scrollLeft) {
+      const table = bodyEl.querySelector(".table-wrap");
+      if (table) table.scrollLeft = scrollLeft;
+    }
+  };
 
   input.addEventListener("input", debounce(() => { query = input.value; drawBody(); }, 120));
   segmented(root.querySelector("#mode"), (v) => {
@@ -242,11 +251,14 @@ export async function render(root) {
 
   // ---- live refresh: during a global sync, after actions, when the tab becomes visible ----
   let requestId = 0;
+  let signalRequestId = 0;
   let loadingDay = false;
   let refreshing = false;
   async function changeDay(newDay) {
     if (newDay === day && !loadingDay) return;
     const id = ++requestId;
+    signalRequestId++;
+    signalStatus.hidden = true;
     loadingDay = true;
     bodyEl.inert = true;
     try {
@@ -265,9 +277,37 @@ export async function render(root) {
         bodyEl.inert = false;
         dateInput.value = day;
         latest.disabled = !day;
+        loadMissingSignals();
       }
     }
   }
+  async function loadMissingSignals() {
+    const requestedDay = day;
+    const pending = data.clients.filter((client) => client.signals_complete === false);
+    if (!requestedDay || !pending.length) return;
+    const id = ++signalRequestId;
+    signalStatus.hidden = false;
+    signalStatus.textContent = "Загружаем сигналы за выбранную дату…";
+    let failed = 0;
+    let available = false;
+    for (const client of pending) {
+      if (id !== signalRequestId || !bodyEl.isConnected) return;
+      try {
+        const response = await api.loadSignals(client.id, requestedDay);
+        available ||= response.available;
+      } catch {
+        failed++;
+      }
+    }
+    if (id !== signalRequestId || !bodyEl.isConnected) return;
+    if (available) await refresh(true);
+    if (id !== signalRequestId || !bodyEl.isConnected) return;
+    signalStatus.hidden = !failed;
+    if (failed) signalStatus.textContent = failed === pending.length
+      ? "Не удалось загрузить сигналы за выбранную дату"
+      : "Для части проектов не удалось загрузить сигналы";
+  }
+  loadMissingSignals();
   async function refresh(force = false) {
     if (loadingDay || (refreshing && !force)) return;
     const id = ++requestId;
@@ -317,6 +357,7 @@ export async function render(root) {
   const timer = setInterval(onVisible, 60000); // keeps "обновлено N мин назад" honest
   return () => {
     requestId++;
+    signalRequestId++;
     window.removeEventListener("sync:progress", onSync);
     window.removeEventListener("sync:done", onSync);
     document.removeEventListener("visibilitychange", onVisible);

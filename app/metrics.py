@@ -82,6 +82,12 @@ def display_snapshot(snapshot: dict | None, signals: dict | None, override: dict
         if result.get("branches"):
             for branch in result["branches"]:
                 branch["signals"] = branch_counts.get(branch["id"])
+        elif not snapshot:
+            result["branches_count"] = counts["expected"]
+            result["branches"] = [
+                {"id": branch_id, "name": row["name"], "signals": row}
+                for branch_id, row in branch_counts.items() if "name" in row
+            ]
     override = override or {}
     # A manual change is dated. Use the latest imported figures as the live baseline.
     if signals and signals["day"] != day and {"signals_done", "signals_total"}.intersection(override):

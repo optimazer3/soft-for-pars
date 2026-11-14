@@ -347,21 +347,40 @@ def save_snapshot(client_id: int, period: str, source_updated_at: str | None,
              Jsonb(progress) if progress is not None else None, Jsonb(extras or {})),
         )
         for shift_day, counts in (signals or {}).items():
-            conn.execute(
-                """
-                INSERT INTO app.daily_signals(client_id, day, counts) VALUES(%s, %s, %s)
-                ON CONFLICT(client_id, day) DO UPDATE SET counts = excluded.counts
-                WHERE (SELECT count(*) FROM jsonb_object_keys(excluded.counts->'branches')) >=
-                      (SELECT count(*) FROM jsonb_object_keys(daily_signals.counts->'branches'))
-                """,
-                (client_id, shift_day, Jsonb(counts)),
-            )
+            conn.execute(UPSERT_SIGNALS, (client_id, shift_day, Jsonb(counts)))
 
     def save_transaction(conn):
         with conn.transaction():
             save(conn)
 
     _run(save_transaction)
+
+
+UPSERT_SIGNALS = """
+    INSERT INTO app.daily_signals(client_id, day, counts) VALUES(%s, %s, %s)
+    ON CONFLICT(client_id, day) DO UPDATE SET counts = excluded.counts
+    WHERE (SELECT count(*) FROM jsonb_object_keys(excluded.counts->'branches')) >=
+          (SELECT count(*) FROM jsonb_object_keys(daily_signals.counts->'branches'))
+"""
+
+
+def latest_signals(client_id: int, selected: date, exact: bool) -> dict | None:
+    return query_one(
+        "SELECT day, counts FROM app.daily_signals WHERE client_id = %s AND day <= %s "
+        "AND (NOT %s OR day = %s) ORDER BY day DESC LIMIT 1",
+        (client_id, selected, exact, selected),
+    )
+
+
+def signals_complete(row: dict | None) -> bool:
+    if not row:
+        return False
+    counts = row["counts"]
+    return len(counts["branches"]) == counts["expected"]
+
+
+def save_daily_signals(client_id: int, day: date, counts: dict) -> None:
+    execute(UPSERT_SIGNALS, (client_id, day, Jsonb(counts)))
 
 
 def latest_snapshot(client_id: int, day: date | None = None) -> dict | None:

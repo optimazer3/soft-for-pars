@@ -130,7 +130,8 @@ export function summaryGrid(s, prev) {
   return html`<div class="summary stagger">${planBlock(s.progress, prev?.progress)}${summaryTiles(s, prev, 1)}</div>`;
 }
 
-export const dataDate = (s) => (s?.source_updated_at ? fmtDay(s.source_updated_at) : "");
+export const snapshotDate = (s) => s?.fetched_at ? fmtDay(s.day) : "";
+export const kpiDate = (s) => fmtDay(s?.source_updated_at);
 
 // ---------- table cells ----------
 export function ratioCell(x, status = "") {

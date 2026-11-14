@@ -349,7 +349,9 @@ def dashboard(day: date | None = None):
     out = []
     for c in clients:
         item = public_client(c)
-        item["snapshot"] = display_snapshot(snaps.get(c["id"]), signals.get(c["id"]), overrides.get(c["id"]), selected)
+        signal = signals.get(c["id"])
+        item["snapshot"] = display_snapshot(snaps.get(c["id"]), signal, overrides.get(c["id"]), selected)
+        item["signals_complete"] = db.signals_complete(signal)
         out.append(item)
     s = db.get_settings()
     nxt = next_slot(s["schedule_times"], datetime.now().astimezone()) if s["schedule_enabled"] else None
@@ -367,14 +369,24 @@ def client_snapshot(client_id: int, day: date | None = None):
     client = get_client_or_404(client_id)
     today = db.now().date()
     selected = day or today
-    signal = db.query_one(
-        "SELECT day, counts FROM app.daily_signals WHERE client_id = %s AND day <= %s "
-        "AND (%s::date IS NULL OR day = %s) ORDER BY day DESC LIMIT 1", (client_id, selected, day, day),
-    )
+    signal = db.latest_signals(client_id, selected, day is not None)
     override = db.query_one("SELECT metrics FROM app.metric_overrides WHERE client_id = %s AND day = %s",
                             (client_id, selected))
     snapshot = display_snapshot(db.latest_snapshot(client_id, day), signal, (override or {}).get("metrics"), selected)
-    return {"client": client, "snapshot": snapshot, "key_metrics": KEY_METRICS, "today": today}
+    return {"client": client, "snapshot": snapshot, "key_metrics": KEY_METRICS, "today": today,
+            "signals_complete": db.signals_complete(signal)}
+
+
+@app.post("/api/clients/{client_id}/signals/{day}")
+async def update_signals(client_id: int, day: date):
+    if day > db.now().date():
+        raise HTTPException(422, "Выберите сегодняшнюю или прошедшую дату")
+    await asyncio.to_thread(get_client_or_404, client_id)
+    try:
+        available = await collector.sync_daily_signals(client_id, day)
+    except OptimizerError as exc:
+        raise HTTPException(502, str(exc)) from None
+    return {"available": available}
 
 
 @app.patch("/api/clients/{client_id}/metrics/{day}", status_code=204)

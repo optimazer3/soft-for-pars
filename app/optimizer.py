@@ -235,6 +235,16 @@ class OptimizerClient:
         signals = data["signals"]
         return actual.isoformat(), {"done": sum(bool(s.get("mark")) for s in signals), "total": len(signals)}
 
+    async def collect_daily_signals(self, day: date) -> dict | None:
+        await self.login()
+        active = [branch for branch in await self.branches() if branch["is_active"]]
+        counts = {}
+        for branch in active:
+            shift = await self._optional(self.shift_signals(branch["id"], day))
+            if shift and shift[0] == day.isoformat():
+                counts[branch["id"]] = {**shift[1], "name": branch["name"]}
+        return {"branches": counts, "expected": len(active)} if counts else None
+
     async def badges(self) -> dict:
         """Audio badges ("Аудиобейджи"): handed out now / all active badges."""
         all_badges = await self._get_json("/api/badges")
@@ -292,7 +302,9 @@ class OptimizerClient:
             if not shift or shift[0] != yesterday.isoformat():
                 prior = await self._optional(self.shift_signals(b["id"], yesterday))
             for day, counts in (item for item in (shift, prior) if item):
-                signals.setdefault(day, {"branches": {}, "expected": len(active)})["branches"][b["id"]] = counts
+                signals.setdefault(day, {"branches": {}, "expected": len(active)})["branches"][b["id"]] = {
+                    **counts, "name": b["name"],
+                }
         return CollectResult(period=period, kpi=total, progress=progress, branches=rows,
                              source_updated_at=updated, extras=extras, signals=signals)
 

@@ -57,6 +57,7 @@ export const api = {
   syncAll: () => request("POST", "/api/sync"),
   syncStatus: () => request("GET", "/api/sync/status"),
   snapshot: (id, day) => request("GET", `/api/clients/${id}/snapshot${day ? `?${qs({ day })}` : ""}`),
+  loadSignals: (id, day) => request("POST", `/api/clients/${id}/signals/${day}`),
   updateMetrics: (id, day, body) => request("PATCH", `/api/clients/${id}/metrics/${day}`, body),
   settings: () => request("GET", "/api/settings"),
   saveSettings: (body) => request("PUT", "/api/settings", body),

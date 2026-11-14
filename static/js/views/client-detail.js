@@ -5,7 +5,7 @@ import {
   avatar, fmtDay, fmtPeriod, hostOf, html, icon, mount, refreshRelTimes, relSpan, syncErrorToast, toast, withBusy,
 } from "../ui.js";
 import { planBar, planCell } from "../plan.js";
-import { dataDate, signalsCell, summaryTiles } from "../summary.js";
+import { kpiDate, signalsCell, snapshotDate, summaryTiles } from "../summary.js";
 import { editMetrics } from "../metric-editor.js";
 import { reportDay } from "../report-date.js";
 
@@ -19,7 +19,9 @@ function kpiCell(key, m) {
 export async function render(root, [idParam]) {
   const id = +idParam;
   const day = reportDay();
-  let { client, snapshot, today } = await api.snapshot(id, day);
+  let { client, snapshot, today, signals_complete: signalsComplete } = await api.snapshot(id, day);
+  let disposed = false;
+  let signalStatus = day && signalsComplete === false ? "Загружаем сигналы за выбранную дату…" : "";
 
   function branchesHtml(s) {
     if (!s.branches?.length) return "";
@@ -32,7 +34,7 @@ export async function render(root, [idParam]) {
           ${b.kpi
             ? html`<td class="num">${planCell(b.progress, "exec")}</td><td class="num">${planCell(b.progress, "forecast")}</td>
               ${kpiCell("sales_amount", b.kpi.sales_amount)}${kpiCell("vtl_orders_count", b.kpi.vtl_orders_count)}`
-            : html`<td colspan="4" class="cell-error">Данные по салону получить не удалось</td>`}
+            : html`<td colspan="4" class="cell-muted">${b.error ? "Данные по салону получить не удалось" : "Нет снимка KPI"}</td>`}
           <td class="num">${b.all ? signalsCell(s.extras?.signals) : signalsCell(b.signals)}</td>
         </tr>`)}</tbody>
       </table></div></div>`;
@@ -50,7 +52,8 @@ export async function render(root, [idParam]) {
             <a class="chip" href="${client.base_url}" target="_blank" rel="noopener">${hostOf(client.base_url)} ${icon("external")}</a>
             ${day ? html`<span class="chip">${icon("calendar")} ${fmtDay(day)}</span>` : ""}
             ${s?.period ? html`<span class="chip">${fmtPeriod(s.period)}</span>` : ""}
-            ${dataDate(s) ? html`<span class="chip">Данные на <b>${dataDate(s)}</b></span>` : ""}
+            ${snapshotDate(s) && !day ? html`<span class="chip">Снимок от <b>${snapshotDate(s)}</b></span>` : ""}
+            ${kpiDate(s) && kpiDate(s) !== snapshotDate(s) ? html`<span class="chip">KPI в Оптимайзере на <b>${kpiDate(s)}</b></span>` : ""}
             ${s?.fetched_at ? html`<span class="chip">${icon("clock")} Обновлено ${relSpan(s.fetched_at)}</span>` : ""}
           </div>
         </div>
@@ -60,6 +63,7 @@ export async function render(root, [idParam]) {
           ${!day || day === today ? html`<button class="btn btn-primary" id="sync">${icon("refresh")} Обновить</button>` : ""}
         </div>
       </div>
+      ${signalStatus ? html`<p class="signal-status" role="status">${signalStatus}</p>` : ""}
       ${client.last_status === "error" && client.last_error ? html`<div class="error-banner">${icon("alert")}<div><b>Последнее обновление не удалось.</b> ${client.last_error}</div></div>` : ""}
       ${s ? html`
         ${planBar(s.progress, s.period)}
@@ -85,16 +89,29 @@ export async function render(root, [idParam]) {
 
   async function reload() {
     const fresh = await api.snapshot(id, day);
-    if (!root.isConnected) return;
+    if (disposed || !root.isConnected) return;
     ({ client, snapshot, today } = fresh);
     draw();
   }
   draw();
+  if (signalStatus) {
+    api.loadSignals(id, day).then(({ available }) => {
+      if (disposed) return;
+      signalStatus = "";
+      if (available) return reload();
+      draw();
+    }).catch(() => {
+      if (disposed) return;
+      signalStatus = "Не удалось загрузить сигналы за выбранную дату";
+      draw();
+    });
+  }
 
   const onDone = () => reload().catch(() => {});
   const timer = setInterval(() => refreshRelTimes(root), 60000);
   window.addEventListener("sync:done", onDone);
   return () => {
+    disposed = true;
     window.removeEventListener("sync:done", onDone);
     clearInterval(timer);
   };
