@@ -29,6 +29,7 @@
   --surface-3: #1e2128;
   --topbar-bg: rgba(11, 12, 15, .72);
   --row-hover: rgba(255, 255, 255, .025);
+  --scroll-thumb: #505566;
   --line: rgba(255, 255, 255, .06);
   --line-strong: rgba(255, 255, 255, .11);
   /* ink */
@@ -73,6 +74,7 @@ html[data-theme="light"] {
   --surface-3: #e8eaf3;
   --topbar-bg: rgba(255, 255, 255, .88);
   --row-hover: rgba(62, 70, 110, .045);
+  --scroll-thumb: #a5abc0;
   --line: rgba(36, 42, 73, .10);
   --line-strong: rgba(36, 42, 73, .18);
   --text: #22263a;
@@ -89,8 +91,16 @@ html[data-theme="light"] {
   --info: #2361ad;
   --shadow-pop: 0 24px 60px -20px rgba(34, 38, 58, .32), 0 0 0 1px var(--line);
 }
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+[data-scrolling],
+:is(.table-wrap, .modal-body, .branch-tabs, .login-screen, textarea):is(:hover, :focus-visible) {
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
 body {
-  margin: 0; min-height: 100vh; overflow-y: scroll;
+  margin: 0; min-height: 100vh;
   font: 14px/1.5 var(--font); font-feature-settings: "cv11", "ss03";
   background: var(--bg); color: var(--text);
   -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
@@ -412,14 +422,22 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .grid.kpi-table td, .grid.kpi-table th { padding-left: 7px; padding-right: 7px; }
 .grid.kpi-table th { padding-inline: 4px; }
 .grid.kpi-table td:last-child, .grid.kpi-table th:last-child { padding-right: 10px; padding-left: 0; }
-.grid.kpi-table .client-cell { min-width: 0; gap: 10px; }
+.grid.kpi-table .client-cell { min-width: 0; gap: 7px; }
+.grid.kpi-table .client-cell .avatar { width: 28px; height: 28px; flex: 0 0 auto; }
 .grid.kpi-table .client-cell > span { min-width: 0; }
-.grid.kpi-table .client-cell .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.grid.kpi-table :is(.cell-kpi, .plan-cell) { align-items: center; }
+.grid.kpi-table .client-cell .sub { gap: 4px; }
+.grid.kpi-table .client-cell .sub .dot { flex-shrink: 0; }
+.grid.kpi-table :is(.client-cell .name, .client-cell .sub > span:not(.dot), .v > span:not(.dot), .p) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.grid.kpi-table :is(.cell-kpi, .plan-cell) { align-items: center; width: 100%; }
+.grid.kpi-table :is(.cell-kpi, .plan-cell) :is(.v, .p) { max-width: 100%; overflow: hidden; }
 .project-cell { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
-.project-cell .icon-btn { flex: 0 0 auto; width: 29px; height: 29px; }
-.grid.kpi-table .plan-cell, .grid.kpi-table .mini-track { min-width: 0; width: 68px; }
-.grid.kpi-table .plan-cell { width: auto; }
+.project-cell .icon-btn { flex: 0 0 auto; width: 26px; height: 26px; }
+.grid.kpi-table .plan-cell { min-width: 0; }
+.grid.kpi-table .mini-track { width: 68px; max-width: 100%; }
 .grid.kpi-table td:first-child, .grid.kpi-table th:first-child { padding-left: 16px; }
 .grid.compare td:first-child { width: 260px; color: var(--text-2); }
 .cell-kpi { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }

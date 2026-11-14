@@ -45,17 +45,17 @@ const sep = html`<span class="sep">·</span>`;
 const columns = [
   { key: "name", label: "Клиент" },
   { key: "_exec", label: "План продаж", width: 99 },
-  { key: "_forecast", label: "Прогноз", width: 72 },
-  { key: "sales_amount", label: "Сумма заказов", width: 113 },
+  { key: "_forecast", label: "Прогноз", width: 99 },
+  { key: "sales_amount", label: "Сумма заказов", width: 130 },
   { key: "vtl_orders_count", label: "Заказы ВТЛ", width: 88 },
-  { key: "_activity", label: "Активность", width: 88 },
-  { key: "_tasks_prev", label: "Задачи · прош. нед.", title: "Задачи прошлой недели", width: 132 },
-  { key: "_tasks", label: "Задачи · эта нед.", title: "Задачи этой недели", width: 116 },
-  { key: "_created", label: "Задач за день", title: "Задач поставлено за день", width: 101 },
+  { key: "_activity", label: "Активность", width: 97 },
+  { key: "_tasks_prev", label: "Задачи · прош.", title: "Задачи прошлой недели", width: 109 },
+  { key: "_tasks", label: "Задачи · тек.", title: "Задачи этой недели", width: 93 },
+  { key: "_created", label: "Задач за день", title: "Задач поставлено за день", width: 95 },
   { key: "_signals", label: "Сигналы", title: "Сигналы · разобрано / всего", width: 85 },
   { key: "_analysis", label: "Задачи из анализа", title: "Задачи из анализа филиалов", width: 127 },
-  { key: "_badges", label: "Бейджи", width: 70 },
-  { key: "_date", label: "Дата снимка", width: 97 },
+  { key: "_badges", label: "Бейджи", width: 67 },
+  { key: "_date", label: "Дата снимка", width: 96 },
 ];
 
 function panel(c, i, prevSnap, canSync = true) {
@@ -91,9 +91,11 @@ function panel(c, i, prevSnap, canSync = true) {
 function cellKpi(key, m) {
   if (!m) return html`<span class="cell-kpi"><span class="v" style="color:var(--text-3)">—</span></span>`;
   const kind = metricKind(key);
+  const fact = formatValue(m.current, kind);
+  const plan = m.plan ? `план ${formatValue(m.plan, kind)}` : "план —";
   return html`<span class="cell-kpi">
-    <span class="v"><span class="dot ${metricStatus(m)}"></span>${formatValue(m.current, kind)}</span>
-    <span class="p">план ${m.plan ? formatValue(m.plan, kind) : "—"}</span></span>`;
+    <span class="v" title="${fact}"><span class="dot ${metricStatus(m)}"></span><span>${fact}</span></span>
+    <span class="p" title="${plan}">${plan}</span></span>`;
 }
 
 function skeleton() {
@@ -170,13 +172,17 @@ export async function render(root) {
         <button type="button" class="column-label" title="${title}" aria-label="${title}">${label}<span class="arrow" aria-hidden="true">▲</span></button>
       </th>`;
     };
-    return html`<div class="table-wrap"><table class="grid kpi-table">
+    return html`<div class="table-wrap" role="region" aria-label="Таблица показателей" tabindex="0"><table class="grid kpi-table">
       <colgroup><col>${columns.slice(1).map(({ width }) => html`<col style="width:${width}px">`)}<col style="width:42px"></colgroup>
       <thead><tr>${columns.map(th)}<th scope="col" aria-label="Действия"></th></tr></thead>
       <tbody>${list.map((c, i) => html`<tr style="--i:${i}" data-id="${c.id}">
         <td><div class="project-cell"><a class="client-cell" href="#/client/${c.id}">${avatar(c.name)}<span>
-          <div class="name">${c.name}</div>
-          <div class="sub"><span class="dot ${c.enabled ? c.last_status : "never"}"></span>${c.snapshot?.fetched_at ? relSpan(c.snapshot.fetched_at) : c.snapshot ? "Есть показатели" : day ? "Нет данных за дату" : "Нет данных"}</div></span></a>
+          <div class="name" title="${c.name}">${c.name}</div>
+          <div class="sub"><span class="dot ${c.enabled ? c.last_status : "never"}"></span>
+            ${c.snapshot?.fetched_at ? relSpan(c.snapshot.fetched_at, true)
+              : c.snapshot ? html`<span title="Есть показатели">Есть данные</span>`
+              : html`<span title="${day ? "Нет данных за дату" : "Нет данных"}">Нет данных</span>`}
+          </div></span></a>
           <button class="icon-btn" data-act="metrics" title="Изменить показатели" aria-label="Изменить показатели">${icon("edit")}</button>
         </div></td>
         <td class="num">${planCell(c.snapshot?.progress, "exec")}</td>
@@ -199,7 +205,7 @@ export async function render(root) {
   mount(root, html`
     <div class="page-head">
       <div>
-        <h1 class="page-title">Дашборд</h1>
+        <h1 class="page-title">Показатели</h1>
         <div class="page-sub" id="summary">${summaryHtml()}</div>
         <div class="page-sub" id="signal-status" role="status" hidden></div>
       </div>

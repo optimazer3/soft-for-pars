@@ -88,6 +88,15 @@ window.addEventListener("hashchange", route);
 window.addEventListener("resize", () => moveIndicator(indicator, tabs.querySelector(".tab.active")));
 document.fonts?.ready.then(() => moveIndicator(indicator, tabs.querySelector(".tab.active")));
 
+const scrollTimers = new WeakMap();
+window.addEventListener("scroll", (event) => {
+  const scroller = event.target === document ? document.scrollingElement : event.target;
+  if (!(scroller instanceof Element)) return;
+  scroller.setAttribute("data-scrolling", "");
+  clearTimeout(scrollTimers.get(scroller));
+  scrollTimers.set(scroller, setTimeout(() => scroller.removeAttribute("data-scrolling"), 750));
+}, { capture: true, passive: true });
+
 const themeToggle = document.getElementById("theme-toggle");
 const themeMeta = document.querySelector('meta[name="theme-color"]');
 function applyTheme(light) {

@@ -74,20 +74,28 @@ export function hue(name) {
 export const avatar = (name) => html`<span class="avatar" style="--h:${hue(name)}">${initials(name)}</span>`;
 export const hostOf = (url) => { try { return new URL(url).host; } catch { return url; } };
 
-export function relTime(iso) {
+export function relTime(iso, compact = false) {
   if (!iso) return "никогда";
   const d = new Date(iso);
   const s = (Date.now() - d.getTime()) / 1000;
-  if (s < 45) return "только что";
-  if (s < 3600) return `${Math.round(s / 60)} мин назад`;
+  if (s < 45) return compact ? "сейчас" : "только что";
+  if (s < 3600) return compact ? `${Math.round(s / 60)} мин` : `${Math.round(s / 60)} мин назад`;
+  if (compact) {
+    const now = new Date();
+    return now.toDateString() === d.toDateString() ? fmtTime(d)
+      : d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+  }
   if (s < 86400 && new Date().getDate() === d.getDate()) return `сегодня в ${fmtTime(d)}`;
   if (s < 172800) return `вчера в ${fmtTime(d)}`;
   return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 /** Relative time that can be refreshed in place (see refreshRelTimes). */
-export const relSpan = (iso) => html`<span data-rel="${iso || ""}" title="${iso ? new Date(iso).toLocaleString("ru-RU") : ""}">${relTime(iso)}</span>`;
+export const relSpan = (iso, compact = false) => html`<span data-rel="${iso || ""}"
+  ${compact ? html`data-rel-compact` : ""} title="${iso ? new Date(iso).toLocaleString("ru-RU") : ""}">${relTime(iso, compact)}</span>`;
 export function refreshRelTimes(root) {
-  root.querySelectorAll("[data-rel]").forEach((el) => { el.textContent = relTime(el.dataset.rel); });
+  root.querySelectorAll("[data-rel]").forEach((el) => {
+    el.textContent = relTime(el.dataset.rel, el.hasAttribute("data-rel-compact"));
+  });
 }
 export const fmtTime = (d) => d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
 
@@ -304,3 +312,4 @@ export async function withBusy(btn, fn) {
   svg?.classList.add("spin");
   try { return await fn(); } finally { btn.disabled = false; svg?.classList.remove("spin"); }
 }
+

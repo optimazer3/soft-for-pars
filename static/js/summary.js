@@ -142,7 +142,8 @@ export function ratioCell(x, status = "") {
 
 export function hoursCell(a) {
   if (!a) return html`<span class="cell-kpi"><span class="v muted">—</span></span>`;
+  const current = formatValue(a.hours, "count");
   return html`<span class="cell-kpi"><span class="v">${formatValue(a.prev_hours ?? a.hours, "count")} ч</span>
-    ${a.prev_hours != null && a.hours != null ? html`<span class="p">сейчас ${formatValue(a.hours, "count")} ч</span>` : ""}</span>`;
+    ${a.prev_hours != null && a.hours != null ? html`<span class="p" title="За эту неделю ${current} ч">тек. ${current} ч</span>` : ""}</span>`;
 }
 

@@ -74,8 +74,9 @@ export function planCell(p, what) {
   if (!p) return html`<span class="plan-cell"><span class="v" style="color:var(--text-3)">—</span></span>`;
   if (what === "forecast") {
     const d = forecastDelta(p);
+    const delta = d === null ? "" : signedMoney(d);
     return html`<span class="plan-cell"><span class="v"><span class="dot ${forecastStatus(p.forecast_percent)}"></span>${formatValue(p.forecast_percent, "percent")}</span>
-      ${d !== null ? html`<span class="p">${signedMoney(d)}</span>` : ""}</span>`;
+      ${delta ? html`<span class="p" title="${delta}">${delta}</span>` : ""}</span>`;
   }
   return html`<span class="plan-cell"><span class="v">${formatValue(p.execution_percent, "percent")}</span>
     <span class="mini-track"><i style="--w:${clamp(p.execution_percent)}%"></i></span></span>`;
