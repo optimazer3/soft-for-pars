@@ -18,7 +18,7 @@ import asyncio
 import random
 from datetime import date, datetime, timedelta
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -61,6 +61,7 @@ class CollectResult:
     branches: list[dict] = field(default_factory=list)
     source_updated_at: str | None = None
     extras: dict = field(default_factory=dict)  # activity, tasks, badges (whole company)
+    signals: dict = field(default_factory=dict)
 
 
 class OptimizerClient:
@@ -191,9 +192,13 @@ class OptimizerClient:
             "hours": round(totals[-1] / 60, 1),
         }
 
-    async def tasks_week(self, week_start: str | None = None) -> dict:
-        """Tasks of a week ("Задачи"): completed / total."""
-        data = await self._get_json("/api/tasks/weekly", params={"week_start": week_start} if week_start else None)
+    async def tasks_week(self, week_start: date) -> dict:
+        return await self._get_json("/api/tasks/weekly", params={"week_start": week_start.isoformat()})
+
+    @staticmethod
+    async def task_progress(data: dict | None) -> dict | None:
+        if data is None:
+            return None
         p = data.get("progress") or {}
         return {
             "week_start": data.get("week_start"),
@@ -201,6 +206,34 @@ class OptimizerClient:
             "done": int(p.get("completed_tasks") or 0),
             "total": int(p.get("total_tasks") or 0),
         }
+
+    async def daily_tasks(self, at: datetime, weeks: list[dict | None]) -> dict:
+        pending = await self._optional(self._get_json("/api/tasks/pending"))
+        if not isinstance(pending, list) or not all(isinstance(week, dict) for week in weeks):
+            return {}
+        by_id = {task["id"]: task for week in weeks for day in week["days"] for task in day["tasks"]}
+        by_id.update((task["id"], task) for task in pending)
+        created = [
+            task for task in by_id.values()
+            if datetime.fromisoformat(task["created_at"].replace("Z", "+00:00")).astimezone(at.tzinfo).date() == at.date()
+        ]
+        return {
+            "tasks_created": len(created),
+            "analysis_tasks": sum(task["source"] in {
+                "analysis_asis", "analysis_edited", "shift_asis", "shift_edited", "trends_asis", "trends_edited",
+            } for task in created),
+        }
+
+    async def shift_signals(self, branch_id: str, day: date) -> tuple[str, dict] | None:
+        data = await self._get_json(f"/api/branch-overview/{quote(branch_id, safe='')}/shift",
+                                    params={"date": day.isoformat()})
+        if not isinstance(data, dict) or not data.get("has_data") or not isinstance(data.get("signals"), list):
+            return None
+        actual = date.fromisoformat(data["date"])
+        if actual > day:
+            return None
+        signals = data["signals"]
+        return actual.isoformat(), {"done": sum(bool(s.get("mark")) for s in signals), "total": len(signals)}
 
     async def badges(self) -> dict:
         """Audio badges ("Аудиобейджи"): handed out now / all active badges."""
@@ -210,25 +243,27 @@ class OptimizerClient:
         issued = {a["badge_id"] for a in current.get("assignments") or [] if not a.get("return_date")}
         return {"issued": len(issued & active), "total": len(active)}
 
-    async def extras(self) -> dict:
-        tasks = await self._optional(self.tasks_week())
-        prev_tasks = None
-        if tasks and tasks.get("week_start"):
-            prev_start = (date.fromisoformat(tasks["week_start"]) - timedelta(days=7)).isoformat()
-            prev_tasks = await self._optional(self.tasks_week(prev_start))
+    async def extras(self, at: datetime) -> dict:
+        week_start = at.date() - timedelta(days=at.weekday())
+        prev_tasks, tasks, next_tasks = [
+            await self._optional(self.tasks_week(week_start + timedelta(days=offset)))
+            for offset in (-7, 0, 7)
+        ]
+        daily = await self._optional(self.daily_tasks(at, [prev_tasks, tasks, next_tasks]))
         return {
             "activity": await self._optional(self.activity()),
-            "tasks": tasks,
-            "tasks_prev": prev_tasks,
+            "tasks": await self._optional(self.task_progress(tasks)),
+            "tasks_prev": await self._optional(self.task_progress(prev_tasks)),
             "badges": await self._optional(self.badges()),
+            **(daily or {}),
         }
 
-    async def collect(self, period: str | None = None) -> CollectResult:
+    async def collect(self, period: str | None = None, *, at: datetime | None = None) -> CollectResult:
         """Log in and fetch the dashboard: totals + every branch.
 
-        Requests are made one after another (the throttle serialises them per site anyway),
-        so a client with N branches costs 10 + 2N requests.
+        Requests are made one after another (the throttle serialises them per site).
         """
+        at = at or datetime.now().astimezone()
         await self.login()
         period = period or await self.default_period()
         branches = await self.branches()
@@ -247,8 +282,19 @@ class OptimizerClient:
                 rows.append({**b, "kpi": None, "progress": None, "error": str(exc)})
 
         updated = total.pop("last_update_date", None)
+        extras = await self.extras(at)
+        active = [b for b in branches if b["is_active"]]
+        signals = {}
+        yesterday = at.date() - timedelta(days=1)
+        for b in active:
+            shift = await self._optional(self.shift_signals(b["id"], at.date()))
+            prior = None
+            if not shift or shift[0] != yesterday.isoformat():
+                prior = await self._optional(self.shift_signals(b["id"], yesterday))
+            for day, counts in (item for item in (shift, prior) if item):
+                signals.setdefault(day, {"branches": {}, "expected": len(active)})["branches"][b["id"]] = counts
         return CollectResult(period=period, kpi=total, progress=progress, branches=rows,
-                             source_updated_at=updated, extras=await self.extras())
+                             source_updated_at=updated, extras=extras, signals=signals)
 
 
 def _retry_after(resp: httpx.Response) -> float | None:
@@ -269,3 +315,4 @@ def _detail(resp: httpx.Response) -> str:
     if isinstance(d, list):
         return "; ".join(str(x.get("msg", x)) for x in d if isinstance(x, dict))
     return ""
+

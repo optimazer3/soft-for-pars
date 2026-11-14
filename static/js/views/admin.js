@@ -22,6 +22,7 @@ const EVENT = {
   client_created: ["Клиент добавлен", "never"],
   client_updated: ["Клиент изменён", "never"],
   client_deleted: ["Клиент удалён", "never"],
+  metrics_changed: ["Показатели изменены", "never"],
   settings_changed: ["Настройки изменены", "never"],
   sync_all: ["Обновить всех", "never"],
 };
@@ -39,6 +40,7 @@ const rolePill = (role) => (role === "admin" ? html`<span class="pill admin">${i
 
 function eventDetails(e) {
   const d = e.details || {};
+  if (e.action === "metrics_changed") return d.day || "";
   if (e.action === "client_updated" && d.fields) return `изменено: ${d.fields.map((f) => FIELD[f] || f).join(", ")}`;
   if (e.action === "user_updated") {
     const parts = [];
@@ -444,3 +446,4 @@ export async function render(root, [tabParam]) {
   }, 30000);
   return () => clearInterval(timer);
 }
+

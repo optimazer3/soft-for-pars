@@ -12,7 +12,7 @@ const clamp = (v) => Math.max(0, Math.min(100, Number(v) || 0));
 
 /** Forecast shortfall/surplus in rubles, computed the same way as the Optimizer site. */
 export function forecastDelta(p) {
-  if (!p || !(p.plan_amount > 0) || !(p.fact_amount > 0)) return null;
+  if (p?.forecast_percent == null || !(p.plan_amount > 0) || !(p.fact_amount > 0)) return null;
   return (p.forecast_percent / 100 - 1) * p.plan_amount;
 }
 
@@ -32,20 +32,20 @@ const deltaChip = (delta) => (delta === null ? "" : html`<span class="delta ${de
 export function planBar(p, period, { prev } = {}) {
   if (!p) return "";
   const days = daysInMonth(period);
-  const passed = Math.max(0, Math.min(days, Math.round((p.progress_percent / 100) * days)));
+  const passed = Math.round((clamp(p.progress_percent) / 100) * days);
   return html`<div class="plan-bar">
     <div class="plan-main">
       <div class="plan-top">
-        <span class="plan-title">План продаж на очки выполнен на <b>${Math.round(p.execution_percent)}%</b></span>
-        <span class="plan-days">${passed} из ${days} дней месяца · ${Math.round(p.progress_percent)}%</span>
+        <span class="plan-title">Выполнение плана продаж на очки <b>${formatValue(p.execution_percent, "percent")}</b></span>
+        ${p.progress_percent == null ? "" : html`<span class="plan-days">${passed} из ${days} дней месяца · ${formatValue(p.progress_percent, "percent")}</span>`}
       </div>
       <div class="plan-segs" aria-hidden="true">${Array.from({ length: days }, (_, i) => html`<i class="${i < passed ? "past" : ""}"></i>`)}</div>
-      <div class="plan-track" style="--w:${clamp(p.execution_percent)}%;--m:${clamp(p.progress_percent)}%"><i></i><span class="marker" title="Сегодня"></span></div>
+      <div class="plan-track" style="--w:${clamp(p.execution_percent)}%;--m:${clamp(p.progress_percent)}%"><i></i>${p.progress_percent == null ? "" : html`<span class="marker" title="Доля месяца"></span>`}</div>
       ${p.plan_amount ? html`<div class="plan-sum">${formatValue(p.fact_amount, "money")} из ${formatValue(p.plan_amount, "money")}</div>` : ""}
     </div>
     <div class="plan-forecast">
       <span class="lbl">Прогноз</span>
-      <span class="big" data-count="${p.forecast_percent}" data-kind="percent" ${prev != null ? html`data-from="${prev}"` : ""}>${formatValue(p.forecast_percent, "percent")}</span>
+      ${p.forecast_percent == null ? html`<span class="big">—</span>` : html`<span class="big" data-count="${p.forecast_percent}" data-kind="percent" ${prev != null ? html`data-from="${prev}"` : ""}>${formatValue(p.forecast_percent, "percent")}</span>`}
       ${deltaChip(forecastDelta(p))}
     </div>
   </div>`;
@@ -80,3 +80,4 @@ export function planCell(p, what) {
   return html`<span class="plan-cell"><span class="v">${formatValue(p.execution_percent, "percent")}</span>
     <span class="mini-track"><i style="--w:${clamp(p.execution_percent)}%"></i></span></span>`;
 }
+

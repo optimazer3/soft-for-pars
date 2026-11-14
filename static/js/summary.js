@@ -1,6 +1,4 @@
-// Client summary: the nine figures the dashboard is about.
-//   plan execution · forecast · total orders · VTL orders · activity (hours)
-//   tasks of the previous week · tasks of the current week · badges · data date
+// Shared project figures for the cards and client detail page.
 import { formatValue, metricStatus } from "./metrics.js";
 import { fmtDay, html } from "./ui.js";
 import { forecastDelta, forecastStatus } from "./plan.js";
@@ -28,7 +26,7 @@ export function tasksStatus(t) {
   return p >= 90 ? "excellent" : p >= 70 ? "good" : "poor";
 }
 
-const count = (v, kind, prev) => html`<span data-count="${v}" data-kind="${kind}" ${prev != null ? html`data-from="${prev}"` : ""}>${formatValue(v, kind)}</span>`;
+const count = (v, kind, prev) => v == null ? "—" : html`<span data-count="${v}" data-kind="${kind}" ${prev != null ? html`data-from="${prev}"` : ""}>${formatValue(v, kind)}</span>`;
 const empty = (label, i) => html`<div class="tile neutral empty" style="--i:${i}"><div class="tile-label">${label}</div>
   <div class="tile-value">—</div><div class="tile-foot"><span>Нет данных</span></div></div>`;
 
@@ -48,10 +46,28 @@ function ratioTile(label, x, i, { status = "accent", foot = "", prev } = {}) {
   if (!x) return empty(label, i);
   return html`<div class="tile ${status}" style="--i:${i}">
     <div class="tile-label">${label}</div>
-    <div class="tile-value">${count(x.done, "count", prev)}<span class="of"> / ${x.total}</span></div>
-    <div class="tile-foot"><span>${foot}</span>${x.total ? html`<span class="tile-exec">${formatValue(Math.round(pct(x.done, x.total)), "percent")}</span>` : ""}</div>
+    <div class="tile-value">${x.done == null ? "—" : count(x.done, "count", prev)}<span class="of"> / ${formatValue(x.total, "count")}</span></div>
+    <div class="tile-foot"><span>${foot}</span>${x.done != null && x.total ? html`<span class="tile-exec">${formatValue(Math.round(pct(x.done, x.total)), "percent")}</span>` : ""}</div>
     <div class="meter"><i style="--w:${clamp(pct(x.done, x.total))}%"></i></div>
   </div>`;
+}
+
+function countTile(label, value, i) {
+  if (value == null) return empty(label, i);
+  return html`<div class="tile accent" style="--i:${i}"><div class="tile-label">${label}</div>
+    <div class="tile-value">${formatValue(value, "count")}</div></div>`;
+}
+
+export function signalsCaption(signals) {
+  if (!signals?.day) return "";
+  const coverage = signals.reported < signals.expected ? ` · ${signals.reported} из ${signals.expected} салонов` : "";
+  return `${fmtDay(signals.day)}${coverage}`;
+}
+
+export function signalsCell(signals) {
+  if (!signals) return "—";
+  return html`<span class="cell-kpi"><span class="v">${formatValue(signals.done, "count")} / ${formatValue(signals.total, "count")}</span>
+    <span class="p">${signalsCaption(signals)}</span></span>`;
 }
 
 function activityTile(a, i, prev) {
@@ -103,10 +119,13 @@ export function summaryTiles(s, prev, start = 0) {
     ratioTile("Задачи прошлой недели", x.tasks_prev, i++, { status: tasksStatus(x.tasks_prev), foot: weekLabel(x.tasks_prev), prev: px.tasks_prev?.done }),
     ratioTile("Задачи этой недели", x.tasks, i++, { foot: weekLabel(x.tasks), prev: px.tasks?.done }),
     ratioTile("Аудиобейджи", x.badges && { done: x.badges.issued, total: x.badges.total }, i++, { foot: "выдано", prev: px.badges?.issued }),
+    countTile("Задач поставлено за день", x.tasks_created, i++),
+    ratioTile("Сигналы · разобрано / всего", x.signals, i++, { foot: signalsCaption(x.signals) }),
+    countTile("Задачи из анализа филиалов", x.analysis_tasks, i++),
   ];
 }
 
-/** Dashboard card body: plan block + six tiles (2 rows × 4 columns). */
+/** Dashboard card body: plan block and project figures. */
 export function summaryGrid(s, prev) {
   return html`<div class="summary stagger">${planBlock(s.progress, prev?.progress)}${summaryTiles(s, prev, 1)}</div>`;
 }
@@ -116,12 +135,13 @@ export const dataDate = (s) => (s?.source_updated_at ? fmtDay(s.source_updated_a
 // ---------- table cells ----------
 export function ratioCell(x, status = "") {
   if (!x) return html`<span class="cell-kpi"><span class="v muted">—</span></span>`;
-  return html`<span class="cell-kpi"><span class="v">${status ? html`<span class="dot ${status}"></span>` : ""}${x.done} / ${x.total}</span>
-    <span class="p">${x.total ? formatValue(Math.round(pct(x.done, x.total)), "percent") : "—"}</span></span>`;
+  return html`<span class="cell-kpi"><span class="v">${status ? html`<span class="dot ${status}"></span>` : ""}${formatValue(x.done, "count")} / ${formatValue(x.total, "count")}</span>
+    <span class="p">${x.done != null && x.total ? formatValue(Math.round(pct(x.done, x.total)), "percent") : "—"}</span></span>`;
 }
 
 export function hoursCell(a) {
   if (!a) return html`<span class="cell-kpi"><span class="v muted">—</span></span>`;
   return html`<span class="cell-kpi"><span class="v">${formatValue(a.prev_hours ?? a.hours, "count")} ч</span>
-    <span class="p">сейчас ${formatValue(a.hours, "count")} ч</span></span>`;
+    ${a.prev_hours != null && a.hours != null ? html`<span class="p">сейчас ${formatValue(a.hours, "count")} ч</span>` : ""}</span>`;
 }
+

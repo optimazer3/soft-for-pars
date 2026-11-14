@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -118,6 +118,20 @@ MIGRATIONS = [
     )""",
     f"CREATE INDEX IF NOT EXISTS events_at ON {SCHEMA_NAME}.events (at DESC)",
     f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA_NAME}.daily_signals (
+        client_id bigint NOT NULL REFERENCES {SCHEMA_NAME}.clients(id) ON DELETE CASCADE,
+        day       date NOT NULL,
+        counts    jsonb NOT NULL,
+        PRIMARY KEY (client_id, day)
+    )""",
+    f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA_NAME}.metric_overrides (
+        client_id bigint NOT NULL REFERENCES {SCHEMA_NAME}.clients(id) ON DELETE CASCADE,
+        day       date NOT NULL,
+        metrics   jsonb NOT NULL,
+        PRIMARY KEY (client_id, day)
+    )""",
+    f"""
     DO $$
     BEGIN
       IF EXISTS (SELECT 1 FROM information_schema.columns
@@ -126,7 +140,9 @@ MIGRATIONS = [
       END IF;
     END $$""",
     # Lock the tables down for Supabase API roles (no-op on plain Postgres).
-    *(f"ALTER TABLE {SCHEMA_NAME}.{t} ENABLE ROW LEVEL SECURITY" for t in ("clients", "snapshots", "settings", "users", "sessions", "events")),
+    *(f"ALTER TABLE {SCHEMA_NAME}.{t} ENABLE ROW LEVEL SECURITY" for t in (
+        "clients", "snapshots", "settings", "users", "sessions", "events", "daily_signals", "metric_overrides"
+    )),
     f"""
     DO $$
     BEGIN
@@ -308,31 +324,63 @@ def delete_settings(keys: list[str]) -> None:
 
 def save_snapshot(client_id: int, period: str, source_updated_at: str | None,
                   kpi: dict, branches: list[dict], progress: dict | None = None,
-                  extras: dict | None = None) -> None:
-    ts = now()
-    execute(
-        """
-        INSERT INTO app.snapshots(client_id, day, period, fetched_at, source_updated_at, kpi, branches, progress, extras)
-        VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT(client_id, day) DO UPDATE SET
-            period = excluded.period,
-            fetched_at = excluded.fetched_at,
-            source_updated_at = excluded.source_updated_at,
-            kpi = excluded.kpi,
-            branches = excluded.branches,
-            progress = excluded.progress,
-            extras = excluded.extras
-        """,
-        (client_id, ts.date(), period, ts, source_updated_at, Jsonb(kpi), Jsonb(branches),
-         Jsonb(progress) if progress is not None else None, Jsonb(extras or {})),
+                  extras: dict | None = None, started_at: datetime | None = None,
+                  signals: dict | None = None) -> None:
+    fetched_at = now()
+    day = (started_at or fetched_at).date()
+
+    def save(conn):
+        conn.execute(
+            """
+            INSERT INTO app.snapshots(client_id, day, period, fetched_at, source_updated_at, kpi, branches, progress, extras)
+            VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT(client_id, day) DO UPDATE SET
+                period = excluded.period,
+                fetched_at = excluded.fetched_at,
+                source_updated_at = excluded.source_updated_at,
+                kpi = excluded.kpi,
+                branches = excluded.branches,
+                progress = excluded.progress,
+                extras = excluded.extras
+            """,
+            (client_id, day, period, fetched_at, source_updated_at, Jsonb(kpi), Jsonb(branches),
+             Jsonb(progress) if progress is not None else None, Jsonb(extras or {})),
+        )
+        for shift_day, counts in (signals or {}).items():
+            conn.execute(
+                """
+                INSERT INTO app.daily_signals(client_id, day, counts) VALUES(%s, %s, %s)
+                ON CONFLICT(client_id, day) DO UPDATE SET counts = excluded.counts
+                WHERE (SELECT count(*) FROM jsonb_object_keys(excluded.counts->'branches')) >=
+                      (SELECT count(*) FROM jsonb_object_keys(daily_signals.counts->'branches'))
+                """,
+                (client_id, shift_day, Jsonb(counts)),
+            )
+
+    def save_transaction(conn):
+        with conn.transaction():
+            save(conn)
+
+    _run(save_transaction)
+
+
+def latest_snapshot(client_id: int, day: date | None = None) -> dict | None:
+    return query_one(
+        "SELECT client_id, day, period, fetched_at, source_updated_at, kpi, branches, progress, extras "
+        "FROM app.snapshots WHERE client_id = %s AND (%s::date IS NULL OR day = %s)"
+        " ORDER BY day DESC LIMIT 1",
+        (client_id, day, day),
     )
 
 
-def latest_snapshot(client_id: int) -> dict | None:
-    return query_one(
-        "SELECT client_id, day, period, fetched_at, source_updated_at, kpi, branches, progress, extras "
-        "FROM app.snapshots WHERE client_id = %s ORDER BY fetched_at DESC LIMIT 1",
-        (client_id,),
+def save_metric_overrides(client_id: int, day: date, changes: dict) -> None:
+    execute(
+        """
+        INSERT INTO app.metric_overrides(client_id, day, metrics) VALUES(%s, %s, jsonb_strip_nulls(%s))
+        ON CONFLICT(client_id, day) DO UPDATE SET
+            metrics = jsonb_strip_nulls(metric_overrides.metrics || %s)
+        """,
+        (client_id, day, Jsonb(changes), Jsonb(changes)),
     )
 
 
@@ -344,6 +392,15 @@ def prune_logs(days: int = 90) -> None:
 
 def prune_snapshots(retention_days: int) -> int:
     """Delete snapshots older than N days, always keeping each client's newest one."""
+    retention = max(1, int(retention_days))
+    execute(
+        """
+        DELETE FROM app.daily_signals s
+        WHERE s.day < current_date - %s::int
+          AND EXISTS (SELECT 1 FROM app.daily_signals n WHERE n.client_id = s.client_id AND n.day > s.day)
+        """,
+        (retention,),
+    )
     return execute(
         """
         DELETE FROM app.snapshots s
@@ -351,5 +408,6 @@ def prune_snapshots(retention_days: int) -> int:
           AND EXISTS (SELECT 1 FROM app.snapshots n
                       WHERE n.client_id = s.client_id AND n.fetched_at > s.fetched_at)
         """,
-        (max(1, int(retention_days)),),
+        (retention,),
     )
+

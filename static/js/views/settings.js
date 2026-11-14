@@ -99,9 +99,9 @@ export async function render(root) {
     $("#int-v").textContent = `${interval.toLocaleString("ru-RU")} с`;
     $("#cd-v").textContent = cd ? `${cd} мин` : "без ограничения";
     $("#ret-v").textContent = plural(+$("#ret").value, "день", "дня", "дней");
-    // ~11 requests per client with 3 branches; a site answers in about 2 s.
+    // ~24 requests per client with 3 branches, including daily figures.
     const rate = Math.min(conc / Math.max(interval, 2), 1 / 0.3);
-    const minutes = (n) => Math.max(1, Math.round((n * 11) / rate / 60));
+    const minutes = (n) => Math.max(1, Math.round((n * 24) / rate / 60));
     $("#estimate").innerHTML = String(html`Полное обновление займёт примерно <b>${minutes(50)} мин</b> для 50 клиентов и <b>${minutes(100)} мин</b> для 100.`);
   };
   ["#conc", "#int", "#cd", "#ret"].forEach((q) => $(q).addEventListener("input", drawRanges));
@@ -127,3 +127,4 @@ export async function render(root) {
     }
   }));
 }
+

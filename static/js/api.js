@@ -46,7 +46,7 @@ export const api = {
   me: () => request("GET", "/api/auth/me"),
   login: (body) => request("POST", "/api/auth/login", body),
   logout: () => request("POST", "/api/auth/logout"),
-  dashboard: () => request("GET", "/api/dashboard"),
+  dashboard: (day) => request("GET", `/api/dashboard${day ? `?${qs({ day })}` : ""}`),
   clients: () => request("GET", "/api/clients"),
   client: (id) => request("GET", `/api/clients/${id}`),
   createClient: (body) => request("POST", "/api/clients", body),
@@ -56,7 +56,9 @@ export const api = {
   syncClient: (id) => request("POST", `/api/clients/${id}/sync`),
   syncAll: () => request("POST", "/api/sync"),
   syncStatus: () => request("GET", "/api/sync/status"),
-  snapshot: (id) => request("GET", `/api/clients/${id}/snapshot`),
+  snapshot: (id, day) => request("GET", `/api/clients/${id}/snapshot${day ? `?${qs({ day })}` : ""}`),
+  updateMetrics: (id, day, body) => request("PATCH", `/api/clients/${id}/metrics/${day}`, body),
   settings: () => request("GET", "/api/settings"),
   saveSettings: (body) => request("PUT", "/api/settings", body),
 };
+

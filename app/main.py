@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -18,6 +18,7 @@ load_env()
 
 from . import auth, db  # noqa: E402
 from .collector import CooldownError, collector
+from .metrics import MetricOverrides, display_snapshot
 from .optimizer import OptimizerError, normalize_base_url
 from .scheduler import next_slot, scheduler_loop
 
@@ -315,47 +316,77 @@ def sync_status():
 # ---------- dashboard ----------
 
 @app.get("/api/dashboard")
-def dashboard():
+def dashboard(day: date | None = None):
+    today = db.now().date()
+    selected = day or today
     clients = db.query(f"SELECT {CLIENT_COLUMNS} FROM app.clients ORDER BY lower(name)")
     # Newest snapshot per client; only the key metrics travel over the network.
     snaps = {
         r["client_id"]: r for r in db.query(
             """
             SELECT DISTINCT ON (s.client_id)
-                   s.client_id, s.period, s.fetched_at, s.source_updated_at, s.progress, s.extras,
+                   s.client_id, s.day, s.period, s.fetched_at, s.source_updated_at, s.progress, s.extras,
                    jsonb_array_length(s.branches) AS branches_count,
                    (SELECT coalesce(jsonb_object_agg(k, s.kpi -> k), '{}'::jsonb)
                       FROM unnest(%s::text[]) AS k WHERE s.kpi ? k) AS kpi
             FROM app.snapshots s
-            ORDER BY s.client_id, s.fetched_at DESC
+            WHERE (%s::date IS NULL OR s.day = %s)
+            ORDER BY s.client_id, s.day DESC
             """,
-            (KEY_METRICS,),
+            (KEY_METRICS, day, day),
         )
     }
+    signals = {r["client_id"]: r for r in db.query(
+        """
+        SELECT DISTINCT ON (client_id) client_id, day, counts FROM app.daily_signals
+        WHERE day <= %s AND (%s::date IS NULL OR day = %s)
+        ORDER BY client_id, day DESC
+        """, (selected, day, day)
+    )}
+    overrides = {r["client_id"]: r["metrics"] for r in db.query(
+        "SELECT client_id, metrics FROM app.metric_overrides WHERE day = %s", (selected,)
+    )}
     out = []
     for c in clients:
         item = public_client(c)
-        s = snaps.get(c["id"])
-        item["snapshot"] = {
-            "period": s["period"], "fetched_at": s["fetched_at"],
-            "source_updated_at": s["source_updated_at"], "branches_count": s["branches_count"],
-            "kpi": s["kpi"], "progress": s["progress"], "extras": s["extras"] or {},
-        } if s else None
+        item["snapshot"] = display_snapshot(snaps.get(c["id"]), signals.get(c["id"]), overrides.get(c["id"]), selected)
         out.append(item)
     s = db.get_settings()
     nxt = next_slot(s["schedule_times"], datetime.now().astimezone()) if s["schedule_enabled"] else None
     return {
         "clients": out,
         "key_metrics": KEY_METRICS,
+        "today": today,
         "sync": collector.status(),
         "next_run": nxt.isoformat(timespec="minutes") if nxt else None,
     }
 
 
 @app.get("/api/clients/{client_id}/snapshot")
-def client_snapshot(client_id: int):
+def client_snapshot(client_id: int, day: date | None = None):
     client = get_client_or_404(client_id)
-    return {"client": client, "snapshot": db.latest_snapshot(client_id), "key_metrics": KEY_METRICS}
+    today = db.now().date()
+    selected = day or today
+    signal = db.query_one(
+        "SELECT day, counts FROM app.daily_signals WHERE client_id = %s AND day <= %s "
+        "AND (%s::date IS NULL OR day = %s) ORDER BY day DESC LIMIT 1", (client_id, selected, day, day),
+    )
+    override = db.query_one("SELECT metrics FROM app.metric_overrides WHERE client_id = %s AND day = %s",
+                            (client_id, selected))
+    snapshot = display_snapshot(db.latest_snapshot(client_id, day), signal, (override or {}).get("metrics"), selected)
+    return {"client": client, "snapshot": snapshot, "key_metrics": KEY_METRICS, "today": today}
+
+
+@app.patch("/api/clients/{client_id}/metrics/{day}", status_code=204)
+def update_metrics(client_id: int, day: date, body: MetricOverrides, request: Request):
+    if day > db.now().date():
+        raise HTTPException(422, "Выберите сегодняшнюю или прошедшую дату")
+    get_client_or_404(client_id)
+    changes = body.model_dump(exclude_unset=True)
+    if changes:
+        db.save_metric_overrides(client_id, day, changes)
+        audit(request, "metrics_changed", str(client_id), {"day": day.isoformat(), "fields": list(changes)})
+    return Response(status_code=204)
 
 
 # ---------- settings ----------
@@ -404,3 +435,4 @@ app.mount("/static", AppStatic(directory=STATIC_DIR), name="static")
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+

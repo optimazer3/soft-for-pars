@@ -135,9 +135,10 @@ class Collector:
                 if not row.get("password"):
                     raise OptimizerError("Не задан пароль клиента — укажите его в редактировании клиента")
                 client = self._client(row["base_url"], row["login"], row["password"])
-                res = await client.collect()
+                at = db.now()
+                res = await client.collect(at=at)
                 await adb(db.save_snapshot, client_id, res.period, res.source_updated_at,
-                          res.kpi, res.branches, res.progress, res.extras)
+                          res.kpi, res.branches, res.progress, res.extras, at, res.signals)
                 await adb(db.execute,
                           "UPDATE app.clients SET last_status = 'ok', last_error = NULL, last_sync_at = %s WHERE id = %s",
                           (db.now(), client_id))
@@ -240,3 +241,4 @@ class Collector:
 
 
 collector = Collector()
+

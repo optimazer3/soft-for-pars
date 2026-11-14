@@ -6,7 +6,9 @@ import {
   relSpan, segmented, STATUS_TEXT, syncErrorToast, toast, withBusy,
 } from "../ui.js";
 import { planCell } from "../plan.js";
-import { dataDate, hoursCell, ratioCell, summaryGrid, tasksStatus } from "../summary.js";
+import { dataDate, hoursCell, ratioCell, signalsCell, summaryGrid, tasksStatus } from "../summary.js";
+import { editMetrics } from "../metric-editor.js";
+import { reportDay, selectReportDay } from "../report-date.js";
 
 /** One KPI tile. `prev` = previous value for the count-up animation. */
 export function tile(key, m, i = 0, prev) {
@@ -40,7 +42,7 @@ function statusPill(c) {
 
 const sep = html`<span class="sep">·</span>`;
 
-function panel(c, keys, i, prevSnap) {
+function panel(c, i, prevSnap, canSync = true) {
   const s = c.snapshot;
   const running = c.last_status === "running";
   return html`<section class="panel" data-id="${c.id}" style="--i:${i}">
@@ -52,12 +54,12 @@ function panel(c, keys, i, prevSnap) {
           <a href="${c.base_url}" target="_blank" rel="noopener">${hostOf(c.base_url)}</a>
           ${s ? html`${sep}<span>${plural(s.branches_count, "салон", "салона", "салонов")}</span>` : ""}
           ${dataDate(s) ? html`${sep}<span>данные на ${dataDate(s)}</span>` : ""}
-          ${s ? html`${sep}<span>обновлено ${relSpan(s.fetched_at)}</span>` : ""}
+          ${s?.fetched_at ? html`${sep}<span>обновлено ${relSpan(s.fetched_at)}</span>` : ""}
         </div>
       </div>
       <div class="panel-actions">
-        <button class="icon-btn" data-act="sync" title="Обновить сейчас" aria-label="Обновить сейчас" ${running ? "disabled" : ""}>${icon("refresh", running ? "spin" : "")}</button>
-        <a class="icon-btn" href="#/clients/${c.id}/edit" title="Редактировать" aria-label="Редактировать">${icon("edit")}</a>
+        ${canSync ? html`<button class="icon-btn" data-act="sync" title="Обновить сейчас" aria-label="Обновить сейчас" ${running ? "disabled" : ""}>${icon("refresh", running ? "spin" : "")}</button>` : ""}
+        <button class="icon-btn" data-act="metrics" title="Изменить показатели" aria-label="Изменить показатели">${icon("edit")}</button>
         <a class="btn btn-sm" href="#/client/${c.id}">Подробнее ${icon("arrowRight")}</a>
       </div>
     </div>
@@ -65,8 +67,8 @@ function panel(c, keys, i, prevSnap) {
     ${s
       ? summaryGrid(s, prevSnap)
       : html`<div class="empty inline">
-          <p>Данных пока нет</p>
-          ${running ? "" : html`<button class="btn btn-primary btn-sm" data-act="sync">${icon("refresh")} Обновить сейчас</button>`}</div>`}
+          <p>${canSync ? "Данных пока нет" : "За эту дату данных нет"}</p>
+          ${running || !canSync ? "" : html`<button class="btn btn-primary btn-sm" data-act="sync">${icon("refresh")} Обновить сейчас</button>`}</div>`}
   </section>`;
 }
 
@@ -88,8 +90,9 @@ function skeleton() {
 
 export async function render(root) {
   mount(root, skeleton());
-  let data = await api.dashboard();
-  let mode = localStorage.getItem("dashMode") === "table" ? "table" : "cards";
+  let day = reportDay();
+  let data = await api.dashboard(day);
+  let mode = "table";
   let query = "";
   let sort = { key: "name", dir: 1 };
 
@@ -98,11 +101,14 @@ export async function render(root) {
     if (sort.key === "_exec") return c.snapshot?.progress?.execution_percent ?? null;
     if (sort.key === "_forecast") return c.snapshot?.progress?.forecast_percent ?? null;
     const x = c.snapshot?.extras || {};
-    const ratio = (t) => (t && t.total ? t.done / t.total : null);
+    const ratio = (t) => (t?.done != null && t.total ? t.done / t.total : null);
     if (sort.key === "_activity") return x.activity ? x.activity.prev_hours ?? x.activity.hours : null;
     if (sort.key === "_tasks_prev") return ratio(x.tasks_prev);
     if (sort.key === "_tasks") return ratio(x.tasks);
     if (sort.key === "_badges") return x.badges ? ratio({ done: x.badges.issued, total: x.badges.total }) : null;
+    if (sort.key === "_created") return x.tasks_created ?? null;
+    if (sort.key === "_signals") return x.signals?.done ?? null;
+    if (sort.key === "_analysis") return x.analysis_tasks ?? null;
     if (sort.key === "_date") return c.snapshot?.source_updated_at ?? null;
     return c.snapshot?.kpi[sort.key]?.current ?? null;
   };
@@ -138,24 +144,31 @@ export async function render(root) {
     }
     if (!list.length) return html`<div class="empty"><h3>Ничего не найдено</h3><p>Попробуйте изменить запрос</p></div>`;
     if (mode === "cards") {
-      return html`<div class="panels stagger">${list.map((c, i) => panel(c, data.key_metrics, i, prev[c.id]))}</div>`;
+      return html`<div class="panels stagger">${list.map((c, i) => panel(c, i, prev[c.id], !day || day === data.today))}</div>`;
     }
     const th = (key, label, num = true) => html`<th class="sortable ${num ? "num" : ""} ${sort.key === key ? `sorted ${sort.dir < 0 ? "desc" : ""}` : ""}" data-sort="${key}">${label}<span class="arrow">▲</span></th>`;
     return html`<div class="table-wrap"><table class="grid kpi-table">
-      <thead><tr>${th("name", "Клиент", false)}${th("_exec", "План продаж")}${th("_forecast", "Прогноз")}${th("sales_amount", "Сумма заказов")}${th("vtl_orders_count", "Заказы ВТЛ")}${th("_activity", "Активность")}${th("_tasks_prev", "Задачи прошлой недели")}${th("_tasks", "Задачи этой недели")}${th("_badges", "Бейджи")}${th("_date", "Данные на")}<th></th></tr></thead>
+      <thead><tr>${th("name", "Клиент", false)}${th("_exec", "План продаж")}${th("_forecast", "Прогноз")}${th("sales_amount", "Сумма заказов")}${th("vtl_orders_count", "Заказы ВТЛ")}${th("_activity", "Активность")}${th("_tasks_prev", "Задачи прошлой недели")}${th("_tasks", "Задачи этой недели")}${th("_created", "Задач поставлено за день")}${th("_signals", "Сигналы · разобрано / всего")}${th("_analysis", "Задачи из анализа филиалов")}${th("_badges", "Бейджи")}${th("_date", "Данные на")}<th scope="col" aria-label="Действия"></th></tr></thead>
       <tbody>${list.map((c, i) => html`<tr style="--i:${i}" data-id="${c.id}">
-        <td><a class="client-cell" href="#/client/${c.id}">${avatar(c.name)}<span>
+        <td><div class="project-cell"><a class="client-cell" href="#/client/${c.id}">${avatar(c.name)}<span>
           <div class="name">${c.name}</div>
-          <div class="sub"><span class="dot ${c.enabled ? c.last_status : "never"}"></span>${c.snapshot ? relSpan(c.snapshot.fetched_at) : "нет данных"}</div></span></a></td>
+          <div class="sub"><span class="dot ${c.enabled ? c.last_status : "never"}"></span>${c.snapshot?.fetched_at ? relSpan(c.snapshot.fetched_at) : c.snapshot ? "Есть показатели" : day ? "Нет данных за дату" : "Нет данных"}</div></span></a>
+          <button class="icon-btn" data-act="metrics" title="Изменить показатели" aria-label="Изменить показатели">${icon("edit")}</button>
+        </div></td>
         <td class="num">${planCell(c.snapshot?.progress, "exec")}</td>
         <td class="num">${planCell(c.snapshot?.progress, "forecast")}</td>
         ${["sales_amount", "vtl_orders_count"].map((k) => html`<td class="num">${cellKpi(k, c.snapshot?.kpi[k])}</td>`)}
         <td class="num">${hoursCell(c.snapshot?.extras?.activity)}</td>
         <td class="num">${ratioCell(c.snapshot?.extras?.tasks_prev, tasksStatus(c.snapshot?.extras?.tasks_prev))}</td>
         <td class="num">${ratioCell(c.snapshot?.extras?.tasks)}</td>
+        <td class="num">${formatValue(c.snapshot?.extras?.tasks_created, "count")}</td>
+        <td class="num">${signalsCell(c.snapshot?.extras?.signals)}</td>
+        <td class="num">${formatValue(c.snapshot?.extras?.analysis_tasks, "count")}</td>
         <td class="num">${ratioCell(c.snapshot?.extras?.badges && { done: c.snapshot.extras.badges.issued, total: c.snapshot.extras.badges.total })}</td>
         <td class="num cell-muted">${dataDate(c.snapshot) || "—"}</td>
-        <td><div class="row-actions"><button class="icon-btn" data-act="sync" title="Обновить сейчас" aria-label="Обновить сейчас" ${c.last_status === "running" ? "disabled" : ""}>${icon("refresh", c.last_status === "running" ? "spin" : "")}</button></div></td>
+        <td><div class="row-actions">
+          ${!day || day === data.today ? html`<button class="icon-btn" data-act="sync" title="Обновить сейчас" aria-label="Обновить сейчас" ${c.last_status === "running" ? "disabled" : ""}>${icon("refresh", c.last_status === "running" ? "spin" : "")}</button>` : ""}
+        </div></td>
       </tr>`)}</tbody></table></div>`;
   }
 
@@ -167,9 +180,14 @@ export async function render(root) {
       </div>
       <div class="toolbar">
         <label class="search">${icon("search")}<input id="q" placeholder="Поиск клиента" aria-label="Поиск клиента"></label>
+        <div class="date-filter">
+          <label for="report-day">Дата</label>
+          <input type="date" id="report-day" value="${day}" max="${data.today}">
+          <button type="button" class="btn btn-sm" id="latest-data" ${day ? "" : "disabled"}>Последние данные</button>
+        </div>
         <div class="segmented" id="mode">
-          <button data-value="cards" class="${mode === "cards" ? "active" : ""}">${icon("grid")} Карточки</button>
           <button data-value="table" class="${mode === "table" ? "active" : ""}">${icon("table")} Таблица</button>
+          <button data-value="cards" class="${mode === "cards" ? "active" : ""}">${icon("grid")} Карточки</button>
         </div>
       </div>
     </div>
@@ -177,14 +195,19 @@ export async function render(root) {
   const bodyEl = root.querySelector("#dash-body");
   const summaryEl = root.querySelector("#summary");
   const input = root.querySelector("#q");
+  const dateInput = root.querySelector("#report-day");
+  const latest = root.querySelector("#latest-data");
   const drawBody = (prev) => mount(bodyEl, bodyHtml(prev));
 
   input.addEventListener("input", debounce(() => { query = input.value; drawBody(); }, 120));
   segmented(root.querySelector("#mode"), (v) => {
     mode = v;
-    localStorage.setItem("dashMode", v);
     drawBody();
   });
+  dateInput.addEventListener("change", () => {
+    if (dateInput.reportValidity()) changeDay(dateInput.value);
+  });
+  latest.addEventListener("click", () => changeDay(""));
 
   // ---- actions ----
   bodyEl.addEventListener("click", async (e) => {
@@ -195,10 +218,15 @@ export async function render(root) {
       drawBody();
       return;
     }
-    const btn = e.target.closest('[data-act="sync"]');
+    const btn = e.target.closest('button[data-act]');
     if (!btn || btn.disabled) return;
     const id = +btn.closest("[data-id]").dataset.id;
     const client = data.clients.find((c) => c.id === id);
+    if (btn.dataset.act === "metrics") {
+      const result = await editMetrics(client, client.snapshot, day || data.today);
+      if (result?.changed) await refresh(true);
+      return;
+    }
     await withBusy(btn, async () => {
       try {
         const res = await api.syncClient(id);
@@ -213,16 +241,43 @@ export async function render(root) {
   });
 
   // ---- live refresh: during a global sync, after actions, when the tab becomes visible ----
+  let requestId = 0;
+  let loadingDay = false;
   let refreshing = false;
-  async function refresh() {
-    if (refreshing) return;
+  async function changeDay(newDay) {
+    if (newDay === day && !loadingDay) return;
+    const id = ++requestId;
+    loadingDay = true;
+    bodyEl.inert = true;
+    try {
+      const fresh = await api.dashboard(newDay);
+      if (id !== requestId || !root.isConnected) return;
+      day = newDay;
+      selectReportDay(day);
+      data = fresh;
+      mount(summaryEl, summaryHtml());
+      drawBody();
+    } catch (err) {
+      if (id === requestId && root.isConnected) toast("error", "Не удалось загрузить данные за дату", err.message);
+    } finally {
+      if (id === requestId) {
+        loadingDay = false;
+        bodyEl.inert = false;
+        dateInput.value = day;
+        latest.disabled = !day;
+      }
+    }
+  }
+  async function refresh(force = false) {
+    if (loadingDay || (refreshing && !force)) return;
+    const id = ++requestId;
     refreshing = true;
     try {
       const old = data;
-      let fresh;
-      try { fresh = await api.dashboard(); } catch { return; }
-      if (!root.isConnected) return;
+      const fresh = await api.dashboard(day);
+      if (id !== requestId || !root.isConnected) return;
       data = fresh;
+      dateInput.max = data.today;
       mount(summaryEl, summaryHtml());
       refreshRelTimes(bodyEl);
       const prevSnap = Object.fromEntries(old.clients.map((c) => [c.id, c.snapshot]));
@@ -231,21 +286,25 @@ export async function render(root) {
       const changed = data.clients.filter((c) => {
         const o = old.clients.find((x) => x.id === c.id);
         return !o || o.last_sync_at !== c.last_sync_at || o.last_status !== c.last_status
-          || o.enabled !== c.enabled || o.name !== c.name;
+          || o.enabled !== c.enabled || o.name !== c.name
+          || JSON.stringify(o.snapshot) !== JSON.stringify(c.snapshot);
       });
+      if (force) { drawBody(); return; }
       if (!changed.length && sameSet) return;
       if (mode !== "cards" || !sameSet) { drawBody(prevSnap); return; }
       for (const c of changed) {
         const el = bodyEl.querySelector(`.panel[data-id="${c.id}"]`);
         if (!el) continue; // filtered out by the search
         const tmp = document.createElement("div");
-        tmp.innerHTML = String(panel(c, data.key_metrics, 0, prevSnap[c.id]));
+        tmp.innerHTML = String(panel(c, 0, prevSnap[c.id], !day || day === data.today));
         const next = tmp.firstElementChild;
         if (prevSnap[c.id]?.fetched_at !== c.snapshot?.fetched_at) next.classList.add("flash");
         next.querySelector(".summary")?.classList.remove("stagger");
         el.replaceWith(next);
         animateCounters(next);
       }
+    } catch (err) {
+      if (force && root.isConnected) toast("error", "Не удалось обновить таблицу", err.message);
     } finally {
       refreshing = false;
     }
@@ -257,9 +316,11 @@ export async function render(root) {
   document.addEventListener("visibilitychange", onVisible);
   const timer = setInterval(onVisible, 60000); // keeps "обновлено N мин назад" honest
   return () => {
+    requestId++;
     window.removeEventListener("sync:progress", onSync);
     window.removeEventListener("sync:done", onSync);
     document.removeEventListener("visibilitychange", onVisible);
     clearInterval(timer);
   };
 }
+

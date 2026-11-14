@@ -88,6 +88,20 @@ window.addEventListener("hashchange", route);
 window.addEventListener("resize", () => moveIndicator(indicator, tabs.querySelector(".tab.active")));
 document.fonts?.ready.then(() => moveIndicator(indicator, tabs.querySelector(".tab.active")));
 
+const themeToggle = document.getElementById("theme-toggle");
+const themeMeta = document.querySelector('meta[name="theme-color"]');
+function applyTheme(light) {
+  document.documentElement.dataset.theme = light ? "light" : "dark";
+  themeToggle.setAttribute("aria-pressed", String(light));
+  themeMeta.content = light ? "#f5f6fa" : "#0b0c0f";
+}
+applyTheme(document.documentElement.dataset.theme === "light");
+themeToggle.addEventListener("click", () => {
+  const light = document.documentElement.dataset.theme !== "light";
+  applyTheme(light);
+  localStorage.setItem("theme", light ? "light" : "dark");
+});
+
 // ---------- refresh all ----------
 const syncBtn = document.getElementById("sync-all");
 const syncLabel = syncBtn.querySelector(".sync-label");
@@ -227,3 +241,4 @@ api.me().then(start).catch((e) => {
   document.body.classList.remove("auth-pending");
   toast("error", "Сервис недоступен", "Обновите страницу чуть позже");
 });
+
