@@ -42,6 +42,22 @@ function statusPill(c) {
 
 const sep = html`<span class="sep">·</span>`;
 
+const columns = [
+  { key: "name", label: "Клиент" },
+  { key: "_exec", label: "План продаж", width: 99 },
+  { key: "_forecast", label: "Прогноз", width: 72 },
+  { key: "sales_amount", label: "Сумма заказов", width: 113 },
+  { key: "vtl_orders_count", label: "Заказы ВТЛ", width: 88 },
+  { key: "_activity", label: "Активность", width: 88 },
+  { key: "_tasks_prev", label: "Задачи · прош. нед.", title: "Задачи прошлой недели", width: 132 },
+  { key: "_tasks", label: "Задачи · эта нед.", title: "Задачи этой недели", width: 116 },
+  { key: "_created", label: "Задач за день", title: "Задач поставлено за день", width: 101 },
+  { key: "_signals", label: "Сигналы", title: "Сигналы · разобрано / всего", width: 85 },
+  { key: "_analysis", label: "Задачи из анализа", title: "Задачи из анализа филиалов", width: 127 },
+  { key: "_badges", label: "Бейджи", width: 70 },
+  { key: "_date", label: "Дата снимка", width: 97 },
+];
+
 function panel(c, i, prevSnap, canSync = true) {
   const s = c.snapshot;
   const running = c.last_status === "running";
@@ -146,9 +162,17 @@ export async function render(root) {
     if (mode === "cards") {
       return html`<div class="panels stagger">${list.map((c, i) => panel(c, i, prev[c.id], !day || day === data.today))}</div>`;
     }
-    const th = (key, label, num = true) => html`<th scope="col" class="sortable ${num ? "num" : ""} ${sort.key === key ? `sorted ${sort.dir < 0 ? "desc" : ""}` : ""}" data-sort="${key}"><span class="column-label">${label}</span><span class="arrow" aria-hidden="true">▲</span></th>`;
+    const th = ({ key, label, title = label }) => {
+      const active = sort.key === key;
+      const descending = sort.dir < 0;
+      return html`<th scope="col" class="sortable ${active ? `sorted ${descending ? "desc" : ""}` : ""}" data-sort="${key}"
+        ${active ? html`aria-sort="${descending ? "descending" : "ascending"}"` : ""}>
+        <button type="button" class="column-label" title="${title}" aria-label="${title}">${label}<span class="arrow" aria-hidden="true">▲</span></button>
+      </th>`;
+    };
     return html`<div class="table-wrap"><table class="grid kpi-table">
-      <thead><tr>${th("name", "Клиент", false)}${th("_exec", "План продаж")}${th("_forecast", "Прогноз")}${th("sales_amount", "Сумма заказов")}${th("vtl_orders_count", "Заказы ВТЛ")}${th("_activity", "Активность")}${th("_tasks_prev", "Задачи прошлой недели")}${th("_tasks", "Задачи этой недели")}${th("_created", "Задач поставлено за день")}${th("_signals", "Сигналы · разобрано / всего")}${th("_analysis", "Задачи из анализа филиалов")}${th("_badges", "Бейджи")}${th("_date", "Дата снимка")}<th scope="col" aria-label="Действия"></th></tr></thead>
+      <colgroup><col>${columns.slice(1).map(({ width }) => html`<col style="width:${width}px">`)}<col style="width:42px"></colgroup>
+      <thead><tr>${columns.map(th)}<th scope="col" aria-label="Действия"></th></tr></thead>
       <tbody>${list.map((c, i) => html`<tr style="--i:${i}" data-id="${c.id}">
         <td><div class="project-cell"><a class="client-cell" href="#/client/${c.id}">${avatar(c.name)}<span>
           <div class="name">${c.name}</div>
@@ -223,8 +247,10 @@ export async function render(root) {
     const th = e.target.closest("th[data-sort]");
     if (th) {
       const key = th.dataset.sort;
+      const focused = th.contains(document.activeElement);
       sort = { key, dir: sort.key === key ? -sort.dir : key === "name" ? 1 : -1 };
       drawBody();
+      if (focused) bodyEl.querySelector(`th[data-sort="${key}"] button`).focus({ preventScroll: true });
       return;
     }
     const btn = e.target.closest('button[data-act]');
