@@ -99,7 +99,7 @@ function cellKpi(key, m) {
 }
 
 function skeleton() {
-  return html`<div class="page-head"><div><div class="skeleton" style="width:180px;height:32px"></div></div></div>
+  return html`<div class="page-head metrics-page-head"><div><div class="skeleton" style="width:180px;height:32px"></div></div></div>
     <div class="panels">${[0, 1].map(() => html`<div class="panel">
       <div class="skeleton" style="width:240px;height:38px;margin-bottom:18px"></div>
       <div class="skeleton" style="height:62px;margin-bottom:16px"></div>
@@ -203,7 +203,7 @@ export async function render(root) {
   }
 
   mount(root, html`
-    <div class="page-head">
+    <div class="page-head metrics-page-head">
       <div>
         <h1 class="page-title">Показатели</h1>
         <div class="page-sub" id="summary">${summaryHtml()}</div>
