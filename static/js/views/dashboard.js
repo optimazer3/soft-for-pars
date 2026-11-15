@@ -6,7 +6,7 @@ import {
   relSpan, segmented, STATUS_TEXT, syncErrorToast, toast, withBusy,
 } from "../ui.js";
 import { planCell } from "../plan.js";
-import { hoursCell, kpiDate, ratioCell, signalsCell, snapshotDate, summaryGrid, tasksStatus } from "../summary.js";
+import { hoursCell, kpiDate, ratioCell, signalsCell, summaryGrid, tasksStatus } from "../summary.js";
 import { editMetrics } from "../metric-editor.js";
 import { reportDay, selectReportDay } from "../report-date.js";
 
@@ -69,7 +69,7 @@ function panel(c, i, prevSnap, canSync = true) {
         <div class="panel-meta">
           <a href="${c.base_url}" target="_blank" rel="noopener">${hostOf(c.base_url)}</a>
           ${s ? html`${sep}<span>${plural(s.branches_count, "салон", "салона", "салонов")}</span>` : ""}
-          ${snapshotDate(s) ? html`${sep}<span>снимок от ${snapshotDate(s)}</span>` : ""}
+          ${kpiDate(s) ? html`${sep}<span>данные актуальны на ${kpiDate(s)}</span>` : ""}
           ${s?.fetched_at ? html`${sep}<span>обновлено ${relSpan(s.fetched_at)}</span>` : ""}
         </div>
       </div>
@@ -127,7 +127,7 @@ export async function render(root) {
     if (sort.key === "_created") return x.tasks_created ?? null;
     if (sort.key === "_signals") return x.signals?.done ?? null;
     if (sort.key === "_analysis") return x.analysis_tasks ?? null;
-    if (sort.key === "_date") return c.snapshot?.fetched_at ? c.snapshot.day : null;
+    if (sort.key === "_date") return kpiDate(c.snapshot) ? c.snapshot.source_updated_at.slice(0, 10) : null;
     return c.snapshot?.kpi[sort.key]?.current ?? null;
   };
 
@@ -180,6 +180,7 @@ export async function render(root) {
           <div class="name" title="${c.name}">${c.name}</div>
           <div class="sub"><span class="dot ${c.enabled ? c.last_status : "never"}"></span>
             ${c.snapshot?.fetched_at ? relSpan(c.snapshot.fetched_at, true)
+              : c.snapshot?.reconstructed ? html`<span title="Расчёт по истории Оптимайзера">По истории</span>`
               : c.snapshot ? html`<span title="Есть показатели">Есть данные</span>`
               : html`<span title="${day ? "Нет данных за дату" : "Нет данных"}">Нет данных</span>`}
           </div></span></a>
@@ -195,7 +196,7 @@ export async function render(root) {
         <td class="num">${signalsCell(c.snapshot?.extras?.signals)}</td>
         <td class="num">${formatValue(c.snapshot?.extras?.analysis_tasks, "count")}</td>
         <td class="num">${ratioCell(c.snapshot?.extras?.badges && { done: c.snapshot.extras.badges.issued, total: c.snapshot.extras.badges.total })}</td>
-        <td class="num cell-muted" title="${c.snapshot?.reconstructed ? "Расчёт по истории Оптимайзера" : kpiDate(c.snapshot) ? `KPI в Оптимайзере на ${kpiDate(c.snapshot)}` : ""}">${c.snapshot?.reconstructed ? "По истории" : snapshotDate(c.snapshot) || "—"}</td>
+        <td class="num cell-muted">${kpiDate(c.snapshot) || "—"}</td>
         <td><div class="row-actions">
           ${!day || day === data.today ? html`<button class="icon-btn" data-act="sync" title="Обновить сейчас" aria-label="Обновить сейчас" ${c.last_status === "running" ? "disabled" : ""}>${icon("refresh", c.last_status === "running" ? "spin" : "")}</button>` : ""}
         </div></td>

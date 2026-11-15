@@ -52,8 +52,8 @@ export async function render(root, [idParam]) {
             <a class="chip" href="${client.base_url}" target="_blank" rel="noopener">${hostOf(client.base_url)} ${icon("external")}</a>
             ${day ? html`<span class="chip">${icon("calendar")} ${fmtDay(day)}</span>` : ""}
             ${s?.period ? html`<span class="chip">${fmtPeriod(s.period)}</span>` : ""}
-            ${snapshotDate(s) && !day ? html`<span class="chip">Снимок от <b>${snapshotDate(s)}</b></span>` : ""}
-            ${kpiDate(s) && kpiDate(s) !== snapshotDate(s) ? html`<span class="chip">KPI в Оптимайзере на <b>${kpiDate(s)}</b></span>` : ""}
+            ${snapshotDate(s) && !day && snapshotDate(s) !== kpiDate(s) ? html`<span class="chip">Снимок от <b>${snapshotDate(s)}</b></span>` : ""}
+            ${kpiDate(s) ? html`<span class="chip">Данные актуальны на <b>${kpiDate(s)}</b></span>` : ""}
             ${s?.fetched_at ? html`<span class="chip">${icon("clock")} Обновлено ${relSpan(s.fetched_at)}</span>` : ""}
           </div>
         </div>
