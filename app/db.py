@@ -132,6 +132,13 @@ MIGRATIONS = [
         PRIMARY KEY (client_id, day)
     )""",
     f"""
+    CREATE TABLE IF NOT EXISTS {SCHEMA_NAME}.historical_reports (
+        client_id bigint NOT NULL REFERENCES {SCHEMA_NAME}.clients(id) ON DELETE CASCADE,
+        day       date NOT NULL,
+        data      jsonb NOT NULL,
+        PRIMARY KEY (client_id, day)
+    )""",
+    f"""
     DO $$
     BEGIN
       IF EXISTS (SELECT 1 FROM information_schema.columns
@@ -141,7 +148,8 @@ MIGRATIONS = [
     END $$""",
     # Lock the tables down for Supabase API roles (no-op on plain Postgres).
     *(f"ALTER TABLE {SCHEMA_NAME}.{t} ENABLE ROW LEVEL SECURITY" for t in (
-        "clients", "snapshots", "settings", "users", "sessions", "events", "daily_signals", "metric_overrides"
+        "clients", "snapshots", "settings", "users", "sessions", "events", "daily_signals", "metric_overrides",
+        "historical_reports",
     )),
     f"""
     DO $$
@@ -381,6 +389,25 @@ def signals_complete(row: dict | None) -> bool:
 
 def save_daily_signals(client_id: int, day: date, counts: dict) -> None:
     execute(UPSERT_SIGNALS, (client_id, day, Jsonb(counts)))
+
+
+def historical_report(client_id: int, day: date) -> dict | None:
+    row = query_one("SELECT data FROM app.historical_reports WHERE client_id = %s AND day = %s", (client_id, day))
+    return row["data"] if row else None
+
+
+def save_historical_report(client_id: int, day: date, data: dict, signals: dict | None) -> None:
+    def save(conn):
+        with conn.transaction():
+            conn.execute(
+                "INSERT INTO app.historical_reports(client_id, day, data) VALUES(%s, %s, %s) "
+                "ON CONFLICT(client_id, day) DO UPDATE SET data = excluded.data",
+                (client_id, day, Jsonb(data)),
+            )
+            if signals:
+                conn.execute(UPSERT_SIGNALS, (client_id, day, Jsonb(signals)))
+
+    _run(save)
 
 
 def latest_snapshot(client_id: int, day: date | None = None) -> dict | None:

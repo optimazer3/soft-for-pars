@@ -21,7 +21,7 @@ export function weekLabel(t) {
 
 /** Share of finished tasks of a closed week: good / so-so / poor. */
 export function tasksStatus(t) {
-  if (!t || !t.total) return "neutral";
+  if (t?.done == null || !t.total) return "neutral";
   const p = pct(t.done, t.total);
   return p >= 90 ? "excellent" : p >= 70 ? "good" : "poor";
 }
