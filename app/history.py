@@ -3,7 +3,7 @@
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 
-from .optimizer import OptimizerClient
+from .optimizer import OptimizerClient, has_mixed_activity, team_activity_minutes
 
 ORDER_METRICS = ("sales_amount", "vtl_orders_count")
 DAILY_TASKS = {"tasks_created", "analysis_tasks"}
@@ -61,10 +61,8 @@ async def historical_activity(client: OptimizerClient, day: date, today: date) -
         return None
     data = await client._get_json("/api/activity/weekly", {"granularity": "day", "days": max(14, days)})
     dates = data["period"]["weeks"]
-    totals = {
-        date.fromisoformat(key): sum(float(row["weeks"][i].get("minutes") or 0) for row in data["rows"])
-        for i, key in enumerate(dates)
-    }
+    minutes = team_activity_minutes(data["rows"], len(dates))
+    totals = {date.fromisoformat(key): value for key, value in zip(dates, minutes)}
 
     def hours(start: date, length: int) -> float | None:
         values = [totals.get(start + timedelta(days=i)) for i in range(length)]
@@ -73,7 +71,7 @@ async def historical_activity(client: OptimizerClient, day: date, today: date) -
     hours_now, hours_prev = hours(monday, day.weekday() + 1), hours(previous, 7)
     if hours_now is None and hours_prev is None:
         return None
-    return {"week_start": monday.isoformat(), "prev_week_start": previous.isoformat(),
+    return {"scope": "team", "week_start": monday.isoformat(), "prev_week_start": previous.isoformat(),
             "hours": hours_now, "prev_hours": hours_prev}
 
 
@@ -124,7 +122,10 @@ async def collect_history(client: OptimizerClient, at: datetime, today: date, *,
     branches = await client.branches()
     signals = None if has_signals else await client.collect_daily_signals(day, branches=branches)
     recorded = snapshot or {}
-    available = {key for key, value in (recorded.get("extras") or {}).items() if value is not None}
+    recorded_extras = recorded.get("extras") or {}
+    available = {key for key, value in recorded_extras.items() if value is not None}
+    if has_mixed_activity(recorded_extras):
+        available.discard("activity")
     extras = {}
     if not (DAILY_TASKS | set(WEEKLY_TASKS)) <= available:
         monday = day - timedelta(days=day.weekday())
@@ -140,4 +141,4 @@ async def collect_history(client: OptimizerClient, at: datetime, today: date, *,
     if "badges" not in available:
         extras["badges"] = await client._optional(historical_badges(client, at))
     orders = await client._optional(historical_orders(client, day, branches)) if orders_missing(recorded) else None
-    return {**(orders or {}), "extras": extras, "full": snapshot is None}, signals
+    return {**(orders or {}), "extras": extras, "full": snapshot is None, "activity_scope": "team"}, signals

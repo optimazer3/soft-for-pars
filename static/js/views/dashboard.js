@@ -44,18 +44,18 @@ const sep = html`<span class="sep">·</span>`;
 
 const columns = [
   { key: "name", label: "Клиент" },
-  { key: "_exec", label: "План продаж", width: 99 },
-  { key: "_forecast", label: "Прогноз", width: 99 },
+  { key: "_exec", label: "План продаж", width: 95 },
+  { key: "_forecast", label: "Прогноз", width: 98 },
   { key: "sales_amount", label: "Сумма заказов", width: 130 },
-  { key: "vtl_orders_count", label: "Заказы ВТЛ", width: 88 },
-  { key: "_activity", label: "Активность", width: 97 },
-  { key: "_tasks_prev", label: "Задачи · прош.", title: "Задачи прошлой недели", width: 109 },
-  { key: "_tasks", label: "Задачи · тек.", title: "Задачи этой недели", width: 93 },
+  { key: "vtl_orders_count", label: "Заказы ВТЛ", width: 83 },
+  { key: "_activity", label: "Активность", width: 94 },
+  { key: "_tasks_prev", label: "Задачи · прош.", title: "Задачи прошлой недели", width: 107 },
+  { key: "_tasks", label: "Задачи · тек.", title: "Задачи этой недели", width: 92 },
   { key: "_created", label: "Задач за день", title: "Задач поставлено за день", width: 95 },
   { key: "_signals", label: "Сигналы", title: "Сигналы · разобрано / всего", width: 85 },
-  { key: "_analysis", label: "Задачи из анализа", title: "Задачи из анализа филиалов", width: 127 },
-  { key: "_badges", label: "Бейджи", width: 67 },
-  { key: "_date", label: "Дата снимка", width: 96 },
+  { key: "_analysis", label: "Задачи из анализа", title: "Задачи из анализа филиалов", width: 123 },
+  { key: "_badges", label: "Бейджи", width: 61 },
+  { key: "_date", label: "Данные актуальны на", width: 144 },
 ];
 
 function panel(c, i, prevSnap, canSync = true) {

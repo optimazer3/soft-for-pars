@@ -30,6 +30,22 @@ ATTEMPTS = 3
 BACKOFF = (3.0, 10.0)        # pause before the 2nd and 3rd attempt (plus jitter)
 MAX_RETRY_AFTER = 120.0
 RETRY_STATUSES = {429, 502, 503, 504}
+TEAM_ROLES = {"EMPLOYEE", "SALES_HEAD", "COMMERCIAL_DIRECTOR"}
+
+
+def team_activity_minutes(rows: list[dict], length: int) -> list[float]:
+    totals = [0.0] * length
+    for row in rows:
+        if row.get("role") not in TEAM_ROLES:
+            continue
+        for i, bucket in enumerate((row.get("weeks") or [])[:length]):
+            totals[i] += float(bucket.get("minutes") or 0)
+    return totals
+
+
+def has_mixed_activity(extras: dict | None) -> bool:
+    activity = (extras or {}).get("activity")
+    return bool(activity and activity.get("scope") != "team")
 
 
 class OptimizerError(Exception):
@@ -180,12 +196,9 @@ class OptimizerClient:
         """Hours in the system ("Мониторинг активности"): previous and current week, whole team."""
         data = await self._get_json("/api/activity/weekly", params={"weeks": "2", "granularity": "week"})
         weeks = data["period"]["weeks"]
-        totals = [0.0] * len(weeks)
-        for row in data.get("rows") or []:
-            for i, w in enumerate(row.get("weeks") or []):
-                if i < len(totals):
-                    totals[i] += float(w.get("minutes") or 0)
+        totals = team_activity_minutes(data["rows"], len(weeks))
         return {
+            "scope": "team",
             "prev_week_start": weeks[0] if len(weeks) > 1 else None,
             "prev_hours": round(totals[0] / 60, 1) if len(weeks) > 1 else None,
             "week_start": weeks[-1],

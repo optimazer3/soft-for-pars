@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .db import signals_complete
 from .history import DAILY_TASKS, WEEKLY_TASKS, orders_missing
+from .optimizer import has_mixed_activity
 
 Number = Annotated[float, Field(ge=0, le=1e15, allow_inf_nan=False)]
 Count = Annotated[int, Field(ge=0, le=1_000_000_000)]
@@ -63,18 +64,28 @@ METRIC_PATHS = {
 
 
 def needs_report(snapshot: dict | None, signals: dict | None, archive: dict | None) -> bool:
-    if archive is not None and (snapshot or archive.get("full")):
-        return False
     recorded = snapshot or {}
     extras = recorded.get("extras") or {}
+    if archive is not None and (snapshot or archive.get("full")):
+        return archive.get("activity_scope") != "team" and (
+            has_mixed_activity(extras) or has_mixed_activity(archive.get("extras"))
+        )
     required = DAILY_TASKS | set(WEEKLY_TASKS) | {"activity", "badges"}
-    return orders_missing(recorded) or not signals_complete(signals) or any(extras.get(key) is None for key in required)
+    return (orders_missing(recorded) or not signals_complete(signals) or has_mixed_activity(extras)
+            or any(extras.get(key) is None for key in required))
+
+
+def report_extras(data: dict | None) -> dict:
+    extras = {key: value for key, value in (data or {}).items() if value is not None}
+    if has_mixed_activity(extras):
+        extras.pop("activity")
+    return extras
 
 
 def display_snapshot(snapshot: dict | None, signals: dict | None, override: dict | None, day: date,
                      archive: dict | None = None) -> dict | None:
     archive = archive or {}
-    archived_extras = {key: value for key, value in archive.get("extras", {}).items() if value is not None}
+    archived_extras = report_extras(archive.get("extras"))
     has_history = bool(archive.get("kpi") or archived_extras)
     if not (snapshot or signals or override or has_history):
         return None
@@ -100,10 +111,7 @@ def display_snapshot(snapshot: dict | None, signals: dict | None, override: dict
         result.update(period=day.strftime("%Y-%m"), kpi=deepcopy(archive.get("kpi") or {}),
                       progress=deepcopy(archive.get("progress")), branches=branches,
                       branches_count=len(branches), reconstructed=True)
-    recorded_extras = result.get("extras") or {}
-    extras = result["extras"] = {**deepcopy(archived_extras), **{
-        key: value for key, value in recorded_extras.items() if value is not None
-    }}
+    extras = result["extras"] = {**deepcopy(archived_extras), **report_extras(result.get("extras"))}
     if result["day"] != day:
         extras.pop("tasks_created", None)
         extras.pop("analysis_tasks", None)

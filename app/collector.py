@@ -19,9 +19,9 @@ from urllib.parse import urlsplit
 import httpx
 
 from . import db
-from .history import collect_history
+from .history import collect_history, historical_activity
 from .metrics import needs_report
-from .optimizer import OptimizerClient, OptimizerError, ServerBusyError
+from .optimizer import OptimizerClient, OptimizerError, ServerBusyError, has_mixed_activity
 from .throttle import Throttle, ThrottleConfig, domain_of
 
 log = logging.getLogger("collector")
@@ -145,8 +145,15 @@ class Collector:
             await self._apply_settings()
             client = self._client(row["base_url"], row["login"], row["password"])
             at = now.replace(year=day.year, month=day.month, day=day.day)
-            data, counts = await collect_history(client, at, now.date(), snapshot=snapshot,
-                                                 has_signals=db.signals_complete(signals))
+            if archive is not None and (snapshot or archive.get("full")):
+                await client.login()
+                activity = await client._optional(historical_activity(client, day, now.date()))
+                data = {**archive, "activity_scope": "team",
+                        "extras": {**(archive.get("extras") or {}), "activity": activity}}
+                counts = None
+            else:
+                data, counts = await collect_history(client, at, now.date(), snapshot=snapshot,
+                                                     has_signals=db.signals_complete(signals))
             await adb(db.save_historical_report, client_id, day, data, counts)
 
     @staticmethod
@@ -169,7 +176,8 @@ class Collector:
             if missing_day is not None:
                 if missing_day != at.date():
                     return {"ok": False, "error": "Обновите страницу и выберите дату снова"}
-                if await adb(db.latest_snapshot, client_id, missing_day):
+                snapshot = await adb(db.latest_snapshot, client_id, missing_day)
+                if snapshot and not has_mixed_activity(snapshot.get("extras")):
                     return {"ok": True, "skipped": True}
             row = await adb(db.query_one, "SELECT * FROM app.clients WHERE id = %s", (client_id,))
             if not row:
