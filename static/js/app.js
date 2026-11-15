@@ -24,6 +24,8 @@ const tabs = document.getElementById("tabs");
 const indicator = document.getElementById("tabs-indicator");
 const locked = () => document.body.classList.contains("auth-locked");
 let cleanup = null;
+let activeTab = null;
+let pendingView = null;
 let renderSeq = 0;
 
 function setActiveTab(name) {
@@ -54,31 +56,35 @@ async function route() {
 
   const seq = ++renderSeq;
   setActiveTab(match.tab);
-  runCleanup();
-
-  if (view.childElementCount) {
-    view.classList.remove("entering");
-    view.classList.add("leaving");
-    await new Promise((r) => setTimeout(r, 110));
-    if (seq !== renderSeq) return;
-  }
-  view.classList.remove("leaving");
-  view.innerHTML = "";
-  void view.offsetWidth; // restart the enter animation
-  view.classList.add("entering");
-  window.scrollTo({ top: 0 });
+  pendingView?.remove();
+  const nextView = document.createElement("div");
+  nextView.className = "view-page";
+  if (view.childElementCount) nextView.classList.add("staging");
+  nextView.inert = true;
+  pendingView = nextView;
+  view.appendChild(nextView);
   try {
-    const dispose = (await match.mod.render(view, match.params)) || null;
-    if (seq !== renderSeq) { dispose?.(); return; } // the user already went elsewhere
+    const dispose = (await match.mod.render(nextView, match.params)) || null;
+    if (seq !== renderSeq) { dispose?.(); return; }
+    runCleanup();
+    view.replaceChildren(nextView);
+    nextView.classList.remove("staging");
+    nextView.classList.add("entering");
+    nextView.inert = false;
+    pendingView = null;
+    activeTab = match.tab;
     cleanup = dispose;
+    window.scrollTo({ top: 0, behavior: "instant" });
   } catch (e) {
     if (seq !== renderSeq || e.status === 401) return; // 401 -> the login screen takes over
+    nextView.remove();
+    pendingView = null;
     console.error(e);
-    view.innerHTML = "";
     if (e.status === 404) {
       toast("error", "Страница не найдена", e.message);
       location.replace("#/dashboard");
     } else {
+      setActiveTab(activeTab);
       toast("error", "Не удалось открыть страницу", e.message);
     }
   }
@@ -232,7 +238,9 @@ function requireLogin() {
   renderSeq++;
   applyRole(null);
   runCleanup();
-  view.innerHTML = "";
+  activeTab = null;
+  pendingView = null;
+  view.replaceChildren();
   showLogin(start);
 }
 
