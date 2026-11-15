@@ -195,7 +195,7 @@ export async function render(root) {
         <td class="num">${signalsCell(c.snapshot?.extras?.signals)}</td>
         <td class="num">${formatValue(c.snapshot?.extras?.analysis_tasks, "count")}</td>
         <td class="num">${ratioCell(c.snapshot?.extras?.badges && { done: c.snapshot.extras.badges.issued, total: c.snapshot.extras.badges.total })}</td>
-        <td class="num cell-muted" title="${kpiDate(c.snapshot) ? `KPI в Оптимайзере на ${kpiDate(c.snapshot)}` : ""}">${snapshotDate(c.snapshot) || "—"}</td>
+        <td class="num cell-muted" title="${c.snapshot?.reconstructed ? "Расчёт по истории Оптимайзера" : kpiDate(c.snapshot) ? `KPI в Оптимайзере на ${kpiDate(c.snapshot)}` : ""}">${c.snapshot?.reconstructed ? "По истории" : snapshotDate(c.snapshot) || "—"}</td>
         <td><div class="row-actions">
           ${!day || day === data.today ? html`<button class="icon-btn" data-act="sync" title="Обновить сейчас" aria-label="Обновить сейчас" ${c.last_status === "running" ? "disabled" : ""}>${icon("refresh", c.last_status === "running" ? "spin" : "")}</button>` : ""}
         </div></td>
@@ -207,7 +207,7 @@ export async function render(root) {
       <div>
         <h1 class="page-title">Показатели</h1>
         <div class="page-sub" id="summary">${summaryHtml()}</div>
-        <div class="page-sub" id="signal-status" role="status" hidden></div>
+        <div class="page-sub" id="report-status" role="status" hidden></div>
       </div>
       <div class="toolbar">
         <label class="search">${icon("search")}<input id="q" placeholder="Поиск клиента" aria-label="Поиск клиента"></label>
@@ -228,7 +228,7 @@ export async function render(root) {
   const input = root.querySelector("#q");
   const dateInput = root.querySelector("#report-day");
   const latest = root.querySelector("#latest-data");
-  const signalStatus = root.querySelector("#signal-status");
+  const reportStatus = root.querySelector("#report-status");
   const drawBody = (prev) => {
     const scrollLeft = bodyEl.querySelector(".table-wrap")?.scrollLeft || 0;
     mount(bodyEl, bodyHtml(prev));
@@ -283,14 +283,14 @@ export async function render(root) {
 
   // ---- live refresh: during a global sync, after actions, when the tab becomes visible ----
   let requestId = 0;
-  let signalRequestId = 0;
+  let reportRequestId = 0;
   let loadingDay = false;
   let refreshing = false;
   async function changeDay(newDay) {
     if (newDay === day && !loadingDay) return;
     const id = ++requestId;
-    signalRequestId++;
-    signalStatus.hidden = true;
+    reportRequestId++;
+    reportStatus.hidden = true;
     loadingDay = true;
     bodyEl.inert = true;
     try {
@@ -309,37 +309,35 @@ export async function render(root) {
         bodyEl.inert = false;
         dateInput.value = day;
         latest.disabled = !day;
-        loadMissingSignals();
+        loadMissingReports();
       }
     }
   }
-  async function loadMissingSignals() {
+  async function loadMissingReports() {
     const requestedDay = day;
-    const pending = data.clients.filter((client) => client.signals_complete === false);
+    const pending = data.clients.filter((client) => client.needs_report);
     if (!requestedDay || !pending.length) return;
-    const id = ++signalRequestId;
-    signalStatus.hidden = false;
-    signalStatus.textContent = "Загружаем сигналы за выбранную дату…";
+    const id = ++reportRequestId;
+    reportStatus.hidden = false;
     let failed = 0;
-    let available = false;
-    for (const client of pending) {
-      if (id !== signalRequestId || !bodyEl.isConnected) return;
+    for (const [index, client] of pending.entries()) {
+      if (id !== reportRequestId || !bodyEl.isConnected) return;
+      reportStatus.textContent = `Загружаем показатели: ${index + 1} из ${pending.length}…`;
       try {
-        const response = await api.loadSignals(client.id, requestedDay);
-        available ||= response.available;
+        await api.loadReport(client.id, requestedDay);
       } catch {
         failed++;
       }
+      if (id !== reportRequestId || !bodyEl.isConnected) return;
+      await refresh(true);
     }
-    if (id !== signalRequestId || !bodyEl.isConnected) return;
-    if (available) await refresh(true);
-    if (id !== signalRequestId || !bodyEl.isConnected) return;
-    signalStatus.hidden = !failed;
-    if (failed) signalStatus.textContent = failed === pending.length
-      ? "Не удалось загрузить сигналы за выбранную дату"
-      : "Для части проектов не удалось загрузить сигналы";
+    if (id !== reportRequestId || !bodyEl.isConnected) return;
+    reportStatus.hidden = !failed;
+    if (failed) reportStatus.textContent = failed === pending.length
+      ? "Не удалось загрузить показатели за выбранную дату"
+      : "Для части проектов не удалось загрузить показатели";
   }
-  loadMissingSignals();
+  loadMissingReports();
   async function refresh(force = false) {
     if (loadingDay || (refreshing && !force)) return;
     const id = ++requestId;
@@ -389,7 +387,7 @@ export async function render(root) {
   const timer = setInterval(onVisible, 60000); // keeps "обновлено N мин назад" honest
   return () => {
     requestId++;
-    signalRequestId++;
+    reportRequestId++;
     window.removeEventListener("sync:progress", onSync);
     window.removeEventListener("sync:done", onSync);
     document.removeEventListener("visibilitychange", onVisible);

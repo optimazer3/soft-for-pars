@@ -19,9 +19,9 @@ function kpiCell(key, m) {
 export async function render(root, [idParam]) {
   const id = +idParam;
   const day = reportDay();
-  let { client, snapshot, today, signals_complete: signalsComplete } = await api.snapshot(id, day);
+  let { client, snapshot, today, needs_report: needsReport } = await api.snapshot(id, day);
   let disposed = false;
-  let signalStatus = day && signalsComplete === false ? "Загружаем сигналы за выбранную дату…" : "";
+  let reportStatus = day && needsReport ? "Загружаем показатели за выбранную дату…" : "";
 
   function branchesHtml(s) {
     if (!s.branches?.length) return "";
@@ -63,7 +63,8 @@ export async function render(root, [idParam]) {
           ${!day || day === today ? html`<button class="btn btn-primary" id="sync">${icon("refresh")} Обновить</button>` : ""}
         </div>
       </div>
-      ${signalStatus ? html`<p class="signal-status" role="status">${signalStatus}</p>` : ""}
+      ${reportStatus ? html`<p class="signal-status" role="status">${reportStatus}</p>`
+        : s?.reconstructed ? html`<p class="signal-status">Показатели рассчитаны по истории Оптимайзера. Месячный план взят из настроек этого месяца.</p>` : ""}
       ${client.last_status === "error" && client.last_error ? html`<div class="error-banner">${icon("alert")}<div><b>Последнее обновление не удалось.</b> ${client.last_error}</div></div>` : ""}
       ${s ? html`
         ${planBar(s.progress, s.period)}
@@ -94,15 +95,14 @@ export async function render(root, [idParam]) {
     draw();
   }
   draw();
-  if (signalStatus) {
-    api.loadSignals(id, day).then(({ available }) => {
+  if (reportStatus) {
+    api.loadReport(id, day).then(() => {
       if (disposed) return;
-      signalStatus = "";
-      if (available) return reload();
-      draw();
+      reportStatus = "";
+      return reload();
     }).catch(() => {
       if (disposed) return;
-      signalStatus = "Не удалось загрузить сигналы за выбранную дату";
+      reportStatus = "Не удалось загрузить показатели за выбранную дату";
       draw();
     });
   }

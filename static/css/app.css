@@ -421,11 +421,11 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
   left: calc(100% + 2px);
   margin: 0;
 }
-#signal-status[hidden] { display: none; }
+#report-status[hidden] { display: none; }
 .signal-status { color: var(--text-2); margin-bottom: 12px; }
 .grid.kpi-table td, .grid.kpi-table th { padding-left: 7px; padding-right: 7px; }
 .grid.kpi-table th { padding: 8px 4px; }
-.grid.kpi-table td { padding-block: 5px; }
+.grid.kpi-table td { padding-block: 6px; }
 .grid.kpi-table td:last-child, .grid.kpi-table th:last-child { padding-right: 10px; padding-left: 0; }
 .grid.kpi-table .client-cell { min-width: 0; gap: 7px; }
 .grid.kpi-table .client-cell .avatar { width: 28px; height: 28px; flex: 0 0 auto; }
@@ -446,9 +446,9 @@ table.grid { width: 100%; border-collapse: separate; border-spacing: 0; }
 .grid.kpi-table .mini-track { width: 68px; max-width: 100%; }
 .grid.kpi-table td:first-child, .grid.kpi-table th:first-child { padding-left: 16px; }
 @media (min-width: 981px) and (max-height: 800px) {
-  .view:has(> .metrics-page-head) { padding-block: 14px 8px; }
+  .view:has(> .metrics-page-head) { padding-block: 13px 3px; }
   .metrics-page-head { margin-bottom: 10px; }
-  .grid.kpi-table td { padding-block: 3px; }
+  .grid.kpi-table td { padding-block: 3.5px; }
 }
 .grid.compare td:first-child { width: 260px; color: var(--text-2); }
 .cell-kpi { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }

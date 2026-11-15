@@ -19,6 +19,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from . import db
+from .history import collect_history
+from .metrics import needs_report
 from .optimizer import OptimizerClient, OptimizerError, ServerBusyError
 from .throttle import Throttle, ThrottleConfig, domain_of
 
@@ -121,6 +123,32 @@ class Collector:
                 await adb(db.save_daily_signals, client_id, day, signals)
             return signals is not None or existing is not None
 
+    async def sync_report(self, client_id: int, day: date) -> None:
+        now = db.now()
+        if day == now.date():
+            result = await self.sync_client(client_id, respect_cooldown=False, missing_day=day)
+            if not result["ok"]:
+                raise OptimizerError(result["error"])
+            if result.get("skipped"):
+                await self.sync_daily_signals(client_id, day)
+            return
+        lock = self._client_locks.setdefault(client_id, asyncio.Lock())
+        async with lock:
+            snapshot = await adb(db.latest_snapshot, client_id, day)
+            signals = await adb(db.latest_signals, client_id, day, True)
+            archive = await adb(db.historical_report, client_id, day)
+            if not needs_report(snapshot, signals, archive):
+                return
+            row = await adb(db.query_one, "SELECT * FROM app.clients WHERE id = %s", (client_id,))
+            if not row or not row.get("password"):
+                raise OptimizerError("Укажите пароль клиента")
+            await self._apply_settings()
+            client = self._client(row["base_url"], row["login"], row["password"])
+            at = now.replace(year=day.year, month=day.month, day=day.day)
+            data, counts = await collect_history(client, at, now.date(), snapshot=snapshot,
+                                                 has_signals=db.signals_complete(signals))
+            await adb(db.save_historical_report, client_id, day, data, counts)
+
     @staticmethod
     def _fresh(row: dict, cooldown_min: int) -> float | None:
         """Minutes since the last successful collection if it is within the cooldown."""
@@ -132,10 +160,17 @@ class Collector:
         ago = (datetime.now().astimezone() - last).total_seconds() / 60
         return ago if ago < cooldown_min else None
 
-    async def sync_client(self, client_id: int, respect_cooldown: bool = True) -> dict:
+    async def sync_client(self, client_id: int, respect_cooldown: bool = True, *,
+                          missing_day: date | None = None) -> dict:
         settings = await self._apply_settings()
         lock = self._client_locks.setdefault(client_id, asyncio.Lock())
         async with lock:
+            at = db.now()
+            if missing_day is not None:
+                if missing_day != at.date():
+                    return {"ok": False, "error": "Обновите страницу и выберите дату снова"}
+                if await adb(db.latest_snapshot, client_id, missing_day):
+                    return {"ok": True, "skipped": True}
             row = await adb(db.query_one, "SELECT * FROM app.clients WHERE id = %s", (client_id,))
             if not row:
                 raise OptimizerError("Клиент не найден")
@@ -151,7 +186,6 @@ class Collector:
                 if not row.get("password"):
                     raise OptimizerError("Не задан пароль клиента — укажите его в редактировании клиента")
                 client = self._client(row["base_url"], row["login"], row["password"])
-                at = db.now()
                 res = await client.collect(at=at)
                 await adb(db.save_snapshot, client_id, res.period, res.source_updated_at,
                           res.kpi, res.branches, res.progress, res.extras, at, res.signals)

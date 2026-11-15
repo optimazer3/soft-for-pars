@@ -235,9 +235,11 @@ class OptimizerClient:
         signals = data["signals"]
         return actual.isoformat(), {"done": sum(bool(s.get("mark")) for s in signals), "total": len(signals)}
 
-    async def collect_daily_signals(self, day: date) -> dict | None:
-        await self.login()
-        active = [branch for branch in await self.branches() if branch["is_active"]]
+    async def collect_daily_signals(self, day: date, *, branches: list[dict] | None = None) -> dict | None:
+        if branches is None:
+            await self.login()
+            branches = await self.branches()
+        active = [branch for branch in branches if branch["is_active"]]
         counts = {}
         for branch in active:
             shift = await self._optional(self.shift_signals(branch["id"], day))

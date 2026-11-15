@@ -6,6 +6,9 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .db import signals_complete
+from .history import DAILY_TASKS, WEEKLY_TASKS, orders_missing
+
 Number = Annotated[float, Field(ge=0, le=1e15, allow_inf_nan=False)]
 Count = Annotated[int, Field(ge=0, le=1_000_000_000)]
 
@@ -59,16 +62,48 @@ METRIC_PATHS = {
 }
 
 
-def display_snapshot(snapshot: dict | None, signals: dict | None, override: dict | None, day: date) -> dict | None:
-    if not (snapshot or signals or override):
+def needs_report(snapshot: dict | None, signals: dict | None, archive: dict | None) -> bool:
+    if archive is not None and (snapshot or archive.get("full")):
+        return False
+    recorded = snapshot or {}
+    extras = recorded.get("extras") or {}
+    required = DAILY_TASKS | set(WEEKLY_TASKS) | {"activity", "badges"}
+    return orders_missing(recorded) or not signals_complete(signals) or any(extras.get(key) is None for key in required)
+
+
+def display_snapshot(snapshot: dict | None, signals: dict | None, override: dict | None, day: date,
+                     archive: dict | None = None) -> dict | None:
+    archive = archive or {}
+    archived_extras = {key: value for key, value in archive.get("extras", {}).items() if value is not None}
+    has_history = bool(archive.get("kpi") or archived_extras)
+    if not (snapshot or signals or override or has_history):
         return None
     result = deepcopy(snapshot) if snapshot else {
         "day": day, "period": None, "fetched_at": None, "source_updated_at": None,
         "kpi": {}, "branches_count": 0,
     }
-    extras = result.setdefault("extras", {})
-    if extras is None:
-        extras = result["extras"] = {}
+    if snapshot:
+        for key, value in (archive.get("kpi") or {}).items():
+            if (result["kpi"].get(key) or {}).get("current") is None:
+                result["kpi"][key] = deepcopy(value)
+        if not result.get("progress") and archive.get("progress"):
+            result["progress"] = deepcopy(archive["progress"])
+        if result.get("branches") and archive.get("branches"):
+            branches = {branch["id"]: branch for branch in archive["branches"]}
+            for branch in result["branches"]:
+                restored = branches.get(branch["id"], {})
+                for key in ("kpi", "progress"):
+                    if not branch.get(key) and restored.get(key):
+                        branch[key] = deepcopy(restored[key])
+    elif has_history:
+        branches = deepcopy(archive.get("branches") or [])
+        result.update(period=day.strftime("%Y-%m"), kpi=deepcopy(archive.get("kpi") or {}),
+                      progress=deepcopy(archive.get("progress")), branches=branches,
+                      branches_count=len(branches), reconstructed=True)
+    recorded_extras = result.get("extras") or {}
+    extras = result["extras"] = {**deepcopy(archived_extras), **{
+        key: value for key, value in recorded_extras.items() if value is not None
+    }}
     if result["day"] != day:
         extras.pop("tasks_created", None)
         extras.pop("analysis_tasks", None)

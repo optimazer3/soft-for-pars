@@ -18,7 +18,7 @@ load_env()
 
 from . import auth, db  # noqa: E402
 from .collector import CooldownError, collector
-from .metrics import MetricOverrides, display_snapshot
+from .metrics import MetricOverrides, display_snapshot, needs_report
 from .optimizer import OptimizerError, normalize_base_url
 from .scheduler import next_slot, scheduler_loop
 
@@ -346,12 +346,18 @@ def dashboard(day: date | None = None):
     overrides = {r["client_id"]: r["metrics"] for r in db.query(
         "SELECT client_id, metrics FROM app.metric_overrides WHERE day = %s", (selected,)
     )}
+    archives = {r["client_id"]: r["data"] for r in db.query(
+        "SELECT client_id, data FROM app.historical_reports WHERE day = %s", (day,)
+    )} if day and day < today else {}
     out = []
     for c in clients:
         item = public_client(c)
+        snapshot = snaps.get(c["id"])
         signal = signals.get(c["id"])
-        item["snapshot"] = display_snapshot(snaps.get(c["id"]), signal, overrides.get(c["id"]), selected)
+        archive = archives.get(c["id"])
+        item["snapshot"] = display_snapshot(snapshot, signal, overrides.get(c["id"]), selected, archive)
         item["signals_complete"] = db.signals_complete(signal)
+        item["needs_report"] = bool(day and needs_report(snapshot, signal, archive))
         out.append(item)
     s = db.get_settings()
     nxt = next_slot(s["schedule_times"], datetime.now().astimezone()) if s["schedule_enabled"] else None
@@ -372,9 +378,24 @@ def client_snapshot(client_id: int, day: date | None = None):
     signal = db.latest_signals(client_id, selected, day is not None)
     override = db.query_one("SELECT metrics FROM app.metric_overrides WHERE client_id = %s AND day = %s",
                             (client_id, selected))
-    snapshot = display_snapshot(db.latest_snapshot(client_id, day), signal, (override or {}).get("metrics"), selected)
+    recorded = db.latest_snapshot(client_id, day)
+    archive = db.historical_report(client_id, day) if day and day < today else None
+    snapshot = display_snapshot(recorded, signal, (override or {}).get("metrics"), selected, archive)
     return {"client": client, "snapshot": snapshot, "key_metrics": KEY_METRICS, "today": today,
-            "signals_complete": db.signals_complete(signal)}
+            "signals_complete": db.signals_complete(signal),
+            "needs_report": bool(day and needs_report(recorded, signal, archive))}
+
+
+@app.post("/api/clients/{client_id}/report/{day}")
+async def update_report(client_id: int, day: date):
+    if day > db.now().date():
+        raise HTTPException(422, "Выберите сегодняшнюю или прошедшую дату")
+    await asyncio.to_thread(get_client_or_404, client_id)
+    try:
+        await collector.sync_report(client_id, day)
+    except OptimizerError as exc:
+        raise HTTPException(502, str(exc)) from None
+    return {"ok": True}
 
 
 @app.post("/api/clients/{client_id}/signals/{day}")
